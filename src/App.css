@@ -18,6 +18,27 @@
   color: #5f6b7a;
 }
 
+.filters-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filters-row label {
+  color: #435266;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.filters-row select {
+  border: 1px solid #c1d6ec;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #fff;
+  color: #1f2f46;
+}
+
 .refresh-btn {
   margin-top: 10px;
   border: 1px solid #9fc3e9;
@@ -92,5 +113,10 @@
 
   .app-shell h1 {
     font-size: 26px;
+  }
+
+  .filters-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
