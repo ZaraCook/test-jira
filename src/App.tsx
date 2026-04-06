@@ -23,6 +23,16 @@ function App() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [assigneeFilter, setAssigneeFilter] = useState('all')
+
+  const assigneeOptions = Array.from(new Set(issues.map((issue) => issue.assignee))).sort(
+    (a, b) => a.localeCompare(b),
+  )
+
+  const filteredIssues =
+    assigneeFilter === 'all'
+      ? issues
+      : issues.filter((issue) => issue.assignee === assigneeFilter)
 
   const fetchIssues = useCallback(async () => {
     try {
@@ -74,9 +84,13 @@ function App() {
       return <p>No issues found for your current Jira query.</p>
     }
 
+    if (filteredIssues.length === 0) {
+      return <p>No issues match the selected assignee.</p>
+    }
+
     return (
       <ul className="issues-list">
-        {issues.map((issue) => {
+        {filteredIssues.map((issue) => {
           const updatedText = issue.updated
             ? new Date(issue.updated).toLocaleString()
             : 'Unknown'
@@ -106,7 +120,23 @@ function App() {
     <main className="app-shell">
       <header>
         <h1>My Jira Issues</h1>
-        <p>{loading ? 'Loading...' : `${issues.length} shown of ${total} total`}</p>
+        <p>{loading ? 'Loading...' : `${filteredIssues.length} shown of ${total} total`}</p>
+        <div className="filters-row">
+          <label htmlFor="assignee-filter">Assignee</label>
+          <select
+            id="assignee-filter"
+            value={assigneeFilter}
+            onChange={(event) => setAssigneeFilter(event.target.value)}
+            disabled={loading || !!error || issues.length === 0}
+          >
+            <option value="all">All assignees</option>
+            {assigneeOptions.map((assignee) => (
+              <option key={assignee} value={assignee}>
+                {assignee}
+              </option>
+            ))}
+          </select>
+        </div>
         <button type="button" onClick={() => void fetchIssues()} className="refresh-btn">
           Refresh
         </button>
