@@ -1,12 +1,18 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
   color: #1f2f46;
-  background: linear-gradient(180deg, #f7fbff 0%, #ffffff 60%);
+  background:
+    radial-gradient(1200px 500px at -10% -10%, rgba(94, 171, 255, 0.24) 0%, rgba(94, 171, 255, 0) 60%),
+    radial-gradient(900px 500px at 110% 0%, rgba(29, 201, 142, 0.18) 0%, rgba(29, 201, 142, 0) 56%),
+    linear-gradient(180deg, #f3f8ff 0%, #eef5ff 45%, #f8fafc 100%);
+  background-attachment: fixed;
 }
 
 #root {
