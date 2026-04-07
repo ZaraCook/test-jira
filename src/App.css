@@ -1,19 +1,19 @@
 :root {
-  --bg-1: #f3f8ff;
-  --bg-2: #edf5ff;
+  --bg-1: #f6f8fc;
+  --bg-2: #eef3fb;
   --surface: rgba(255, 255, 255, 0.86);
   --surface-strong: #ffffff;
-  --line: #d6e3f5;
-  --text-1: #0f2b4a;
-  --text-2: #4a6284;
-  --brand: #1d68df;
-  --brand-soft: #e4efff;
+  --line: #d8e1ee;
+  --text-1: #172b4d;
+  --text-2: #5e6c84;
+  --brand: #0c66e4;
+  --brand-soft: #deebff;
   --success-soft: #e9f7ef;
   --shadow-lg: 0 20px 46px rgba(14, 38, 69, 0.12);
   --shadow-sm: 0 6px 16px rgba(16, 36, 63, 0.07);
 
   color: var(--text-1);
-  background: radial-gradient(circle at 15% 0%, #e7f1ff 0%, #f5f8ff 36%, #f6f8fc 100%);
+  background: linear-gradient(180deg, #f7f9fd 0%, #eef3fb 100%);
 }
 
 * {
@@ -22,7 +22,7 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at 15% 0%, #e7f1ff 0%, #f5f8ff 36%, #f6f8fc 100%);
+  background: linear-gradient(180deg, #f7f9fd 0%, #eef3fb 100%);
   color: var(--text-1);
 }
 
@@ -63,7 +63,7 @@ a:hover {
   height: 360px;
   top: -120px;
   right: -90px;
-  background: radial-gradient(circle, rgba(21, 116, 247, 0.22) 0%, rgba(21, 116, 247, 0) 72%);
+  background: radial-gradient(circle, rgba(12, 102, 228, 0.16) 0%, rgba(12, 102, 228, 0) 72%);
   animation: floatBlobA 11s ease-in-out infinite;
 }
 
@@ -72,7 +72,7 @@ a:hover {
   height: 300px;
   bottom: -130px;
   left: -80px;
-  background: radial-gradient(circle, rgba(40, 196, 148, 0.2) 0%, rgba(40, 196, 148, 0) 72%);
+  background: radial-gradient(circle, rgba(9, 30, 66, 0.1) 0%, rgba(9, 30, 66, 0) 72%);
   animation: floatBlobB 14s ease-in-out infinite;
 }
 
@@ -86,7 +86,7 @@ a:hover {
 
 .topbar h1 {
   margin: 0 0 4px;
-  font-size: 34px;
+  font-size: 32px;
   font-weight: 800;
   letter-spacing: -0.02em;
 }
@@ -171,10 +171,10 @@ a:hover {
   background: var(--surface);
   backdrop-filter: blur(6px);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 14px;
   overflow: hidden;
   min-height: 0;
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 10px 24px rgba(9, 30, 66, 0.08);
 }
 
 .jira-list {
@@ -301,19 +301,19 @@ a:hover {
   gap: 16px;
   align-items: flex-start;
   padding: 20px;
-  border-bottom: 1px solid #dae4f4;
-  background: linear-gradient(100deg, #f3f8ff 0%, #eff8f3 100%);
+  border-bottom: 1px solid #dde4ee;
+  background: linear-gradient(100deg, #f4f7fc 0%, #edf3fd 100%);
 }
 
 .workspace-issue-key {
-  color: #175dc2;
+  color: var(--brand);
   font-weight: 700;
   margin-bottom: 6px;
 }
 
 .workspace-header h2 {
   margin: 0;
-  font-size: 28px;
+  font-size: 30px;
   line-height: 1.25;
   letter-spacing: -0.015em;
 }
@@ -343,8 +343,8 @@ a:hover {
 }
 
 .ticket-side {
-  border-right: 1px solid #dde6f4;
-  background: linear-gradient(180deg, #fcfdff 0%, #f9fbff 100%);
+  border-right: 1px solid #dde4ee;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
 }
 
 .panel-section + .panel-section {
@@ -353,8 +353,44 @@ a:hover {
 
 .panel-section h3 {
   margin: 0 0 14px;
-  font-size: 17px;
+  font-size: 16px;
   letter-spacing: -0.01em;
+}
+
+.panel-section {
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid #e2e8f2;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.jira-property-shell {
+  border: 1px solid #e1e7f0;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.jira-property-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf1f6;
+}
+
+.jira-property-row select {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: #fbfdff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-1);
+}
+
+.jira-property-row:last-child {
+  border-bottom: 0;
 }
 
 .issue-detail-grid {
@@ -402,6 +438,49 @@ a:hover {
   font-size: 13px;
   font-weight: 600;
   color: #44546f;
+}
+
+.ticket-textarea {
+  border: 1px solid var(--line);
+  background: #fbfdff;
+  border-radius: 10px;
+  padding: 9px 12px;
+  min-height: 120px;
+  color: var(--text-1);
+  resize: vertical;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.ticket-textarea:focus {
+  outline: none;
+  border-color: #8fb1e6;
+  box-shadow: 0 0 0 3px rgba(29, 104, 223, 0.14);
+}
+
+.branch-create-section {
+  border-top: 1px solid #dfe7f5;
+  padding-top: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.error-inline,
+.success-inline {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.error-inline {
+  background: #ffebe6;
+  color: #ae2a19;
+  border: 1px solid #f5c2b7;
+}
+
+.success-inline {
+  background: #e9f7ef;
+  color: #1f6c49;
+  border: 1px solid #b8e6ce;
 }
 
 .linked-branch-banner {
@@ -576,12 +655,12 @@ a:hover {
   gap: 4px;
   padding: 10px 12px;
   cursor: pointer;
-  background: #f7faff;
+  background: #f7f9fc;
   transition: background 130ms ease;
 }
 
 .field-accordion-item > summary:hover {
-  background: #edf5ff;
+  background: #edf3fd;
 }
 
 .field-accordion-item > summary::-webkit-details-marker {
@@ -591,7 +670,14 @@ a:hover {
 .field-key {
   font-size: 13px;
   font-weight: 800;
-  color: #1a3f71;
+  color: #1f3a60;
+}
+
+.field-meta {
+  font-size: 11px;
+  color: #6b7f9b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .field-preview {
@@ -604,11 +690,18 @@ a:hover {
   padding: 12px;
   background: #ffffff;
   border-top: 1px solid #e3ebf7;
-  color: #223c60;
+  color: #213a5d;
   font-size: 12px;
   line-height: 1.45;
   overflow: auto;
   max-height: 260px;
+}
+
+.github-side .detail-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
 }
 
 .jira-row {
@@ -739,8 +832,155 @@ a:hover {
     grid-template-columns: 1fr;
   }
 
+  .jira-property-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
   .field-toolbar {
     flex-direction: column;
     align-items: stretch;
   }
+}
+
+/* CodeMirror Editor Styling */
+.code-editor-container {
+  min-height: 420px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.code-editor-fallback .ticket-textarea {
+  min-height: 420px;
+  width: 100%;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.cm-editor {
+  height: 100% !important;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.cm-gutters {
+  background-color: var(--bg-2) !important;
+  border-right: 1px solid var(--line) !important;
+  color: var(--text-2) !important;
+}
+
+.cm-gutter {
+  background-color: var(--bg-2) !important;
+}
+
+.cm-content {
+  padding: 16px 0 !important;
+  color: var(--text-1) !important;
+}
+
+.cm-line {
+  padding: 0 16px !important;
+}
+
+.cm-cursor {
+  border-left-color: var(--brand) !important;
+}
+
+.cm-selectionBackground {
+  background-color: var(--brand-soft) !important;
+}
+
+.cm-activeLineGutter {
+  background-color: rgba(12, 102, 228, 0.05) !important;
+}
+
+.cm-activeLine {
+  background-color: rgba(12, 102, 228, 0.05) !important;
+}
+
+/* Syntax highlighting colors */
+.cm-string {
+  color: #2d9d48 !important;
+}
+
+.cm-number {
+  color: #d97706 !important;
+}
+
+.cm-atom {
+  color: #d97706 !important;
+}
+
+.cm-keyword {
+  color: #0c66e4 !important;
+  font-weight: 500;
+}
+
+.cm-variable {
+  color: var(--text-1) !important;
+}
+
+.cm-property {
+  color: var(--text-1) !important;
+}
+
+.cm-comment {
+  color: var(--text-2) !important;
+  font-style: italic;
+}
+
+.cm-meta {
+  color: var(--text-2) !important;
+}
+
+.cm-qualifier {
+  color: var(--text-1) !important;
+}
+
+.cm-builtin {
+  color: #0c66e4 !important;
+}
+
+.cm-bracket {
+  color: var(--text-1) !important;
+}
+
+.cm-tag {
+  color: #0c66e4 !important;
+}
+
+.cm-attribute {
+  color: #d97706 !important;
+}
+
+/* Scrollbar styling */
+.cm-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-2) var(--bg-2);
+}
+
+.cm-scroller::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.cm-scroller::-webkit-scrollbar-track {
+  background: var(--bg-2);
+}
+
+.cm-scroller::-webkit-scrollbar-thumb {
+  background: var(--text-2);
+  border-radius: 4px;
+}
+
+.cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: var(--text-1);
+}
+
+/* Autocomplete menu */
+.cm-completionLabel {
+  color: var(--text-1) !important;
+}
+
+.cm-completionDetail {
+  color: var(--text-2) !important;
 }

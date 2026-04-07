@@ -1,6 +1,10 @@
 # Jira + GitHub Context Viewer
 
-This app shows Jira issues and lets you browse real GitHub repositories, branches, and files in the side panel.
+This app shows Jira issues and lets you:
+
+- browse real GitHub repositories, branches, and files
+- create new GitHub branches from the selected repository
+- edit Jira issue summary/description/status and save changes to Jira
 
 ## Setup
 
@@ -33,7 +37,15 @@ Frontend runs on Vite, backend API proxy runs on port `3001` by default.
 
 ## GitHub token permissions
 
-Use a token that can read repositories you want to browse.
+Use a token that can read and create branches in repositories you want to use.
 
-- Fine-grained token: `Contents: Read`, `Metadata: Read`
+- Fine-grained token: `Contents: Read and Write`, `Metadata: Read`
 - Classic token: `repo` scope for private repos (or public-only access for public repos)
+
+## Jira edit capabilities
+
+Ticket updates use Jira REST APIs to:
+
+- update `summary`
+- update `description`
+- transition status through available Jira transitions
