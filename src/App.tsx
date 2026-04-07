@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
+import { CodeEditor } from './CodeEditor'
+import { ErrorBoundary } from './ErrorBoundary'
 
 type JiraIssue = {
   id: string
@@ -40,6 +42,26 @@ type JiraIssueDetails = {
 
 type IssueDetailsResponse = {
   issue: JiraIssueDetails
+  error?: string
+  details?: string
+}
+
+type JiraTransition = {
+  id: string
+  name: string
+  toStatus: string
+}
+
+type JiraTransitionsResponse = {
+  issueKey: string
+  transitions: JiraTransition[]
+  error?: string
+  details?: string
+}
+
+type JiraIssueUpdateResponse = {
+  updated: boolean
+  issueKey: string
   error?: string
   details?: string
 }
@@ -126,6 +148,39 @@ type GithubRepoFileResponse = {
   details?: string
 }
 
+type GithubCreateBranchResponse = {
+  created: boolean
+  repo: string
+  sourceBranch: string
+  branch: {
+    name: string
+    url: string
+  }
+  error?: string
+  details?: string
+}
+
+type GithubCommitResponse = {
+  committed: boolean
+  repo: string
+  branch: string
+  commit: {
+    sha: string
+    url: string
+    message: string
+  }
+  filesChanged: number
+  error?: string
+  details?: string
+}
+
+type StagedFileChange = {
+  path: string
+  content: string
+}
+
+type FileMode = 'existing' | 'new'
+
 function App() {
   const [issues, setIssues] = useState<JiraIssue[]>([])
   const [total, setTotal] = useState(0)
@@ -154,11 +209,30 @@ function App() {
   const [loadingGithubRepos, setLoadingGithubRepos] = useState(false)
   const [loadingGithubBranches, setLoadingGithubBranches] = useState(false)
   const [loadingGithubFiles, setLoadingGithubFiles] = useState(false)
-  const [loadingGithubFileContent, setLoadingGithubFileContent] = useState(false)
   const [selectedRepo, setSelectedRepo] = useState('')
   const [selectedBranch, setSelectedBranch] = useState('')
   const [selectedFile, setSelectedFile] = useState('')
   const [fieldSearch, setFieldSearch] = useState('')
+  const [ticketDraftSummary, setTicketDraftSummary] = useState('')
+  const [ticketDraftDescription, setTicketDraftDescription] = useState('')
+  const [isEditingTicket, setIsEditingTicket] = useState(false)
+  const [ticketTransitions, setTicketTransitions] = useState<JiraTransition[]>([])
+  const [selectedTransitionId, setSelectedTransitionId] = useState('')
+  const [savingTicket, setSavingTicket] = useState(false)
+  const [ticketSaveError, setTicketSaveError] = useState<string | null>(null)
+  const [ticketSaveSuccess, setTicketSaveSuccess] = useState<string | null>(null)
+  const [branchDraftName, setBranchDraftName] = useState('')
+  const [creatingBranch, setCreatingBranch] = useState(false)
+  const [branchCreateError, setBranchCreateError] = useState<string | null>(null)
+  const [branchCreateSuccess, setBranchCreateSuccess] = useState<string | null>(null)
+  const [stagedChanges, setStagedChanges] = useState<StagedFileChange[]>([])
+  const [fileMode, setFileMode] = useState<FileMode>('existing')
+  const [editorFilePath, setEditorFilePath] = useState('')
+  const [editorFileContent, setEditorFileContent] = useState('')
+  const [commitMessage, setCommitMessage] = useState('')
+  const [commitError, setCommitError] = useState<string | null>(null)
+  const [commitSuccess, setCommitSuccess] = useState<string | null>(null)
+  const [isCommitting, setIsCommitting] = useState(false)
 
   const assigneeOptions = useMemo(
     () =>
@@ -252,6 +326,65 @@ function App() {
     }
   }, [])
 
+  const friendlyFieldLabel = useCallback((key: string): string => {
+    if (/^customfield_\d+$/i.test(key)) {
+      return `Custom Field (${key.replace(/customfield_/i, '')})`
+    }
+
+    return key
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+  }, [])
+
+  const summarizeFieldValue = useCallback((value: unknown): string => {
+    if (value === null || value === undefined) return 'Not set'
+
+    if (typeof value === 'string') {
+      return value.trim() || 'Not set'
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value)
+    }
+
+    if (Array.isArray(value)) {
+      if (value.length === 0) return 'None'
+
+      const compact = value
+        .slice(0, 4)
+        .map((item) => {
+          if (typeof item === 'string') return item
+          if (item && typeof item === 'object' && 'name' in item && typeof item.name === 'string') {
+            return item.name
+          }
+          return JSON.stringify(item)
+        })
+        .join(', ')
+
+      return value.length > 4 ? `${compact} +${value.length - 4} more` : compact
+    }
+
+    if (typeof value === 'object') {
+      const namedValue = value as { name?: string; value?: string; displayName?: string }
+      if (namedValue.displayName) return namedValue.displayName
+      if (namedValue.name) return namedValue.name
+      if (namedValue.value) return namedValue.value
+      return 'Structured value'
+    }
+
+    return 'Value available'
+  }, [])
+
+  const detectFieldType = useCallback((value: unknown): string => {
+    if (value === null || value === undefined) return 'empty'
+    if (Array.isArray(value)) return 'array'
+    if (typeof value === 'object') return 'object'
+    return typeof value
+  }, [])
+
   const formattedFieldEntries = useMemo(() => {
     if (!selectedIssueDetails) {
       return []
@@ -267,16 +400,29 @@ function App() {
 
         return {
           key,
+          label: friendlyFieldLabel(key),
           valueText,
-          preview,
+          preview: preview || summarizeFieldValue(value),
+          fieldType: detectFieldType(value),
         }
       })
       .filter((entry) => {
         if (!search) return true
-        return entry.key.toLowerCase().includes(search) || entry.preview.toLowerCase().includes(search)
+        return (
+          entry.key.toLowerCase().includes(search) ||
+          entry.label.toLowerCase().includes(search) ||
+          entry.preview.toLowerCase().includes(search)
+        )
       })
       .sort((a, b) => a.key.localeCompare(b.key))
-  }, [fieldSearch, selectedIssueDetails, stringifyFieldValue])
+  }, [
+    detectFieldType,
+    fieldSearch,
+    friendlyFieldLabel,
+    selectedIssueDetails,
+    stringifyFieldValue,
+    summarizeFieldValue,
+  ])
 
   const autoLinkedBranch = useMemo(() => {
     if (!selectedIssue) return null
@@ -412,6 +558,27 @@ function App() {
     }
   }, [])
 
+  const fetchIssueTransitions = useCallback(async (issueKey: string) => {
+    try {
+      setTicketTransitions([])
+
+      const response = await fetch(`http://localhost:3001/api/issues/${encodeURIComponent(issueKey)}/transitions`, {
+        cache: 'no-store',
+      })
+
+      const payload = (await response.json()) as JiraTransitionsResponse
+
+      if (!response.ok) {
+        const detailText = payload.details ? ` (${payload.details})` : ''
+        throw new Error((payload.error || 'Failed to load Jira transitions') + detailText)
+      }
+
+      setTicketTransitions(payload.transitions || [])
+    } catch {
+      setTicketTransitions([])
+    }
+  }, [])
+
   const fetchIssueLinks = useCallback(async (issue: JiraIssue) => {
     try {
       setSelectedIssue(issue)
@@ -462,15 +629,277 @@ function App() {
   const handleSelectIssue = useCallback(
     (issue: JiraIssue) => {
       setSelectedIssue(issue)
+      setIsEditingTicket(false)
+      setTicketSaveError(null)
+      setTicketSaveSuccess(null)
+      setBranchCreateError(null)
+      setBranchCreateSuccess(null)
       void fetchIssueDetails(issue.key)
+      void fetchIssueTransitions(issue.key)
       void fetchIssueLinks(issue)
     },
-    [fetchIssueDetails, fetchIssueLinks],
+    [fetchIssueDetails, fetchIssueLinks, fetchIssueTransitions],
   )
+
+  const handleSaveTicket = useCallback(async () => {
+    if (!selectedIssue || !isEditingTicket) {
+      return
+    }
+
+    try {
+      setSavingTicket(true)
+      setTicketSaveError(null)
+      setTicketSaveSuccess(null)
+
+      const response = await fetch(`http://localhost:3001/api/issues/${encodeURIComponent(selectedIssue.key)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          summary: ticketDraftSummary,
+          description: ticketDraftDescription,
+          transitionId: selectedTransitionId || undefined,
+        }),
+      })
+
+      const payload = (await response.json()) as JiraIssueUpdateResponse
+
+      if (!response.ok) {
+        const detailText = payload.details ? ` (${payload.details})` : ''
+        throw new Error((payload.error || 'Failed to save Jira issue') + detailText)
+      }
+
+      setSelectedTransitionId('')
+      setIsEditingTicket(false)
+      setTicketSaveSuccess('Ticket updated successfully in Jira.')
+      await Promise.all([
+        fetchIssueDetails(selectedIssue.key),
+        fetchIssues(),
+        fetchIssueLinks(selectedIssue),
+        fetchIssueTransitions(selectedIssue.key),
+      ])
+    } catch (err) {
+      setTicketSaveError(err instanceof Error ? err.message : 'Unknown error while saving ticket')
+    } finally {
+      setSavingTicket(false)
+    }
+  }, [
+    fetchIssueDetails,
+    fetchIssueLinks,
+    fetchIssueTransitions,
+    fetchIssues,
+    selectedIssue,
+    isEditingTicket,
+    selectedTransitionId,
+    ticketDraftDescription,
+    ticketDraftSummary,
+  ])
+
+  const handleStartEditTicket = useCallback(() => {
+    setTicketSaveError(null)
+    setTicketSaveSuccess(null)
+    setIsEditingTicket(true)
+  }, [])
+
+  const handleCancelEditTicket = useCallback(() => {
+    if (selectedIssueDetails) {
+      setTicketDraftSummary(selectedIssueDetails.summary || '')
+      setTicketDraftDescription(selectedIssueDetails.description || '')
+    }
+
+    setSelectedTransitionId('')
+    setTicketSaveError(null)
+    setTicketSaveSuccess(null)
+    setIsEditingTicket(false)
+  }, [selectedIssueDetails])
+
+  const handleCreateBranch = useCallback(async () => {
+    if (!selectedRepo || !branchDraftName.trim()) {
+      setBranchCreateError('Select a repository and enter a branch name.')
+      return
+    }
+
+    const parsed = parseRepo(selectedRepo)
+    if (!parsed) {
+      setBranchCreateError('Invalid repository format. Expected owner/repo.')
+      return
+    }
+
+    try {
+      setCreatingBranch(true)
+      setBranchCreateError(null)
+      setBranchCreateSuccess(null)
+
+      const response = await fetch(
+        `http://localhost:3001/api/github/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/branches`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            branchName: branchDraftName.trim(),
+            fromBranch: selectedBranch || undefined,
+          }),
+        },
+      )
+
+      const payload = (await response.json()) as GithubCreateBranchResponse
+
+      if (!response.ok) {
+        const detailText = payload.details ? ` (${payload.details})` : ''
+        throw new Error((payload.error || 'Failed to create branch') + detailText)
+      }
+
+      const newBranch = payload.branch?.name || branchDraftName.trim()
+
+      setRepoBranches((prev) => {
+        const exists = prev.some((branch) => branch.name === newBranch)
+        if (exists) return prev
+
+        return [
+          ...prev,
+          {
+            name: newBranch,
+            url: payload.branch?.url || `https://github.com/${selectedRepo}/tree/${encodeURIComponent(newBranch)}`,
+          },
+        ].sort((a, b) => a.name.localeCompare(b.name))
+      })
+
+      setSelectedBranch(newBranch)
+      setBranchDraftName('')
+      setBranchCreateSuccess(`Created ${newBranch} from ${payload.sourceBranch}.`)
+    } catch (err) {
+      setBranchCreateError(err instanceof Error ? err.message : 'Unknown error while creating branch')
+    } finally {
+      setCreatingBranch(false)
+    }
+  }, [branchDraftName, parseRepo, selectedBranch, selectedRepo])
+
+  const handleStageFileChange = useCallback(() => {
+    const path = editorFilePath.trim()
+
+    if (!path) {
+      setCommitError('File path is required to stage a change.')
+      return
+    }
+
+    setCommitError(null)
+    setCommitSuccess(null)
+
+    setStagedChanges((prev) => {
+      const next = [...prev]
+      const existingIndex = next.findIndex((item) => item.path === path)
+      const change = { path, content: editorFileContent }
+
+      if (existingIndex >= 0) {
+        next[existingIndex] = change
+      } else {
+        next.push(change)
+      }
+
+      return next
+    })
+  }, [editorFileContent, editorFilePath])
+
+  const handleUnstageFileChange = useCallback((path: string) => {
+    setStagedChanges((prev) => prev.filter((item) => item.path !== path))
+  }, [])
+
+  const handleCommitAndPush = useCallback(async () => {
+    if (!selectedRepo || !selectedBranch) {
+      setCommitError('Select a repository and branch before committing.')
+      return
+    }
+
+    if (stagedChanges.length === 0) {
+      setCommitError('No staged changes to commit.')
+      return
+    }
+
+    const parsed = parseRepo(selectedRepo)
+    if (!parsed) {
+      setCommitError('Invalid repository format. Expected owner/repo.')
+      return
+    }
+
+    const trimmedMessage = commitMessage.trim()
+    if (!trimmedMessage) {
+      setCommitError('Commit message is required.')
+      return
+    }
+
+    try {
+      setIsCommitting(true)
+      setCommitError(null)
+      setCommitSuccess(null)
+
+      const response = await fetch(
+        `http://localhost:3001/api/github/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/commits`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            branch: selectedBranch,
+            message: trimmedMessage,
+            changes: stagedChanges,
+          }),
+        },
+      )
+
+      const payload = (await response.json()) as GithubCommitResponse
+
+      if (!response.ok) {
+        const detailText = payload.details ? ` (${payload.details})` : ''
+        throw new Error((payload.error || 'Failed to commit and push changes') + detailText)
+      }
+
+      setCommitSuccess(`Committed ${payload.filesChanged} file(s) to ${selectedBranch}.`)
+      setStagedChanges([])
+      setCommitMessage('')
+    } catch (err) {
+      setCommitError(err instanceof Error ? err.message : 'Unknown error while committing changes')
+    } finally {
+      setIsCommitting(false)
+    }
+  }, [
+    commitMessage,
+    editorFilePath,
+    parseRepo,
+    selectedBranch,
+    selectedFile,
+    selectedRepo,
+    stagedChanges,
+  ])
 
   useEffect(() => {
     void fetchIssues()
   }, [fetchIssues])
+
+  useEffect(() => {
+    if (!selectedIssueDetails) {
+      return
+    }
+
+    setTicketDraftSummary(selectedIssueDetails.summary || '')
+    setTicketDraftDescription(selectedIssueDetails.description || '')
+    setIsEditingTicket(false)
+  }, [selectedIssueDetails])
+
+  useEffect(() => {
+    if (fileMode === 'existing') {
+      setEditorFilePath(selectedFile || '')
+      setEditorFileContent(selectedFileContent || '')
+      return
+    }
+
+    if (!editorFilePath) {
+      setEditorFileContent('')
+    }
+  }, [editorFilePath, fileMode, selectedFile, selectedFileContent])
 
   useEffect(() => {
     if (!githubConnected || availableRepos.length === 0) {
@@ -603,7 +1032,6 @@ function App() {
     }
 
     const loadFileContent = async () => {
-      setLoadingGithubFileContent(true)
       setGithubApiError(null)
 
       try {
@@ -625,8 +1053,6 @@ function App() {
         setGithubApiError(err instanceof Error ? err.message : 'Unknown GitHub error')
         setSelectedFileContent('')
         setSelectedFileUrl('')
-      } finally {
-        setLoadingGithubFileContent(false)
       }
     }
 
@@ -650,6 +1076,23 @@ function App() {
     setSelectedFileContent('')
     setSelectedFileUrl('')
     setFieldSearch('')
+    setTicketDraftSummary('')
+    setTicketDraftDescription('')
+    setIsEditingTicket(false)
+    setTicketTransitions([])
+    setSelectedTransitionId('')
+    setTicketSaveError(null)
+    setTicketSaveSuccess(null)
+    setBranchDraftName('')
+    setBranchCreateError(null)
+    setBranchCreateSuccess(null)
+    setStagedChanges([])
+    setFileMode('existing')
+    setEditorFilePath('')
+    setEditorFileContent('')
+    setCommitMessage('')
+    setCommitError(null)
+    setCommitSuccess(null)
   }
 
   const renderIssueList = () => {
@@ -776,21 +1219,186 @@ function App() {
               </select>
             </label>
 
-            <label>
-              File
-              <select
-                value={selectedFile}
-                onChange={(event) => setSelectedFile(event.target.value)}
-                disabled={!githubConnected || !selectedBranch || loadingGithubFiles}
+          </div>
+
+          <div className="panel-section branch-create-section">
+            <h3>Create branch</h3>
+            <div className="github-controls">
+              <label>
+                New branch name
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder={selectedIssue ? `feature/${selectedIssue.key.toLowerCase()}-change` : 'feature/new-branch'}
+                  value={branchDraftName}
+                  onChange={(event) => setBranchDraftName(event.target.value)}
+                  disabled={!githubConnected || !selectedRepo || creatingBranch}
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              className="refresh-btn"
+              onClick={() => void handleCreateBranch()}
+              disabled={!githubConnected || !selectedRepo || creatingBranch || !branchDraftName.trim()}
+            >
+              {creatingBranch ? 'Creating branch...' : 'Create branch'}
+            </button>
+
+            {branchCreateError && <p className="error-inline">{branchCreateError}</p>}
+            {branchCreateSuccess && <p className="success-inline">{branchCreateSuccess}</p>}
+          </div>
+
+          <div className="panel-section branch-create-section">
+            <h3>Edit files and push</h3>
+            <div className="github-controls">
+              <label>
+                File action
+                <select
+                  value={fileMode}
+                  onChange={(event) => {
+                    const nextMode = event.target.value as FileMode
+                    setFileMode(nextMode)
+
+                    if (nextMode === 'existing') {
+                      setEditorFilePath(selectedFile || '')
+                      setEditorFileContent(selectedFileContent || '')
+                      return
+                    }
+
+                    setSelectedFile('')
+                    setEditorFilePath('')
+                    setEditorFileContent('')
+                  }}
+                  disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
+                >
+                  <option value="existing">Existing file</option>
+                  <option value="new">New file</option>
+                </select>
+              </label>
+
+              {fileMode === 'existing' ? (
+                <label>
+                  File
+                  <select
+                    value={selectedFile}
+                    onChange={(event) => {
+                      const nextFile = event.target.value
+                      setSelectedFile(nextFile)
+                      setEditorFilePath(nextFile)
+                      setEditorFileContent('')
+                    }}
+                    disabled={!githubConnected || !selectedBranch || loadingGithubFiles || isCommitting}
+                  >
+                    <option value="">Select a file</option>
+                    {availableFiles.map((file) => (
+                      <option key={file.path} value={file.path}>
+                        {file.path}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label>
+                  New file path
+                  <input
+                    type="text"
+                    className="search-input"
+                    placeholder="src/new-file.ts"
+                    value={editorFilePath}
+                    onChange={(event) => setEditorFilePath(event.target.value)}
+                    disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
+                  />
+                </label>
+              )}
+
+              <label>
+                File content
+                <ErrorBoundary
+                  fallback={
+                    <textarea
+                      className="ticket-textarea"
+                      rows={8}
+                      value={editorFileContent}
+                      onChange={(event) => setEditorFileContent(event.target.value)}
+                      disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
+                    />
+                  }
+                >
+                  <CodeEditor
+                    value={editorFileContent}
+                    onChange={(value) => setEditorFileContent(value)}
+                    disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
+                    fileName={fileMode === 'existing' ? selectedFile : editorFilePath}
+                  />
+                </ErrorBoundary>
+              </label>
+            </div>
+
+            {fileMode === 'existing' && selectedFile && (
+              <p className="field-meta">Editing existing file: {selectedFile}</p>
+            )}
+
+            {fileMode === 'new' && <p className="field-meta">Create a new file by entering a path and content.</p>}
+
+            <div className="workspace-actions">
+              <button
+                type="button"
+                className="refresh-btn"
+                onClick={handleStageFileChange}
+                disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting || !editorFilePath.trim()}
               >
-                <option value="">Select file</option>
-                {availableFiles.map((file) => (
-                  <option key={file.path} value={file.path}>
-                    {file.path}
-                  </option>
+                Stage file change
+              </button>
+            </div>
+
+            {stagedChanges.length > 0 && (
+              <ul className="detail-list">
+                {stagedChanges.map((change) => (
+                  <li key={change.path} className="detail-card">
+                    <div className="detail-subtext">{change.path}</div>
+                    <div className="workspace-actions">
+                      <button
+                        type="button"
+                        className="close-btn"
+                        onClick={() => handleUnstageFileChange(change.path)}
+                        disabled={isCommitting}
+                      >
+                        Unstage
+                      </button>
+                    </div>
+                  </li>
                 ))}
-              </select>
-            </label>
+              </ul>
+            )}
+
+            <div className="github-controls">
+              <label>
+                Commit message
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="feat: update issue flow"
+                  value={commitMessage}
+                  onChange={(event) => setCommitMessage(event.target.value)}
+                  disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
+                />
+              </label>
+            </div>
+
+            <div className="workspace-actions">
+              <button
+                type="button"
+                className="refresh-btn"
+                onClick={() => void handleCommitAndPush()}
+                disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting || stagedChanges.length === 0}
+              >
+                {isCommitting ? 'Committing and pushing...' : 'Commit and push'}
+              </button>
+            </div>
+
+            {commitError && <p className="error-inline">{commitError}</p>}
+            {commitSuccess && <p className="success-inline">{commitSuccess}</p>}
           </div>
 
           {githubApiError && <p className="empty-state">{githubApiError}</p>}
@@ -818,22 +1426,6 @@ function App() {
             </div>
           )}
 
-          <div className="github-file-window">
-            <div className="github-file-header">
-              <span>{selectedRepo || 'No repo selected'}</span>
-              <span>{selectedBranch || 'No branch selected'}</span>
-              <span>{selectedFile || 'No file selected'}</span>
-            </div>
-            <pre className="code-viewer">
-              <code>
-                {githubConnected
-                  ? loadingGithubFileContent
-                    ? '// Loading file content...'
-                    : selectedFileContent || '// No file content available'
-                  : '// Connect GitHub to browse repository, branch, and file'}
-              </code>
-            </pre>
-          </div>
         </div>
 
         <div className="panel-section">
@@ -954,35 +1546,99 @@ function App() {
           <div className="workspace-split">
             <section className="ticket-side">
               <div className="panel-section">
-                <h3>Ticket details</h3>
-                <div className="issue-detail-grid">
-                  <div>
-                    <span className="detail-label">Status</span>
-                    <span className={`status-pill status-${selectedIssueDetails.status.toLowerCase().replace(/\s+/g, '-')}`}>
-                      {selectedIssueDetails.status}
-                    </span>
+                <div className="section-title-row">
+                  <h3>Edit ticket</h3>
+                  {!isEditingTicket && (
+                    <button type="button" className="refresh-btn" onClick={handleStartEditTicket}>
+                      Edit ticket
+                    </button>
+                  )}
+                </div>
+                <div className="github-controls">
+                  <label>
+                    Summary
+                    <input
+                      type="text"
+                      className="search-input"
+                      value={ticketDraftSummary}
+                      onChange={(event) => setTicketDraftSummary(event.target.value)}
+                      disabled={!isEditingTicket || savingTicket}
+                    />
+                  </label>
+
+                  <label>
+                    Description
+                    <textarea
+                      className="ticket-textarea"
+                      value={ticketDraftDescription}
+                      onChange={(event) => setTicketDraftDescription(event.target.value)}
+                      disabled={!isEditingTicket || savingTicket}
+                      rows={7}
+                    />
+                  </label>
+
+                </div>
+
+                {isEditingTicket && (
+                  <div className="workspace-actions">
+                    <button type="button" className="refresh-btn" onClick={() => void handleSaveTicket()} disabled={savingTicket}>
+                      {savingTicket ? 'Saving...' : 'Save to Jira'}
+                    </button>
+                    <button type="button" className="close-btn" onClick={handleCancelEditTicket} disabled={savingTicket}>
+                      Cancel
+                    </button>
                   </div>
-                  <div>
+                )}
+
+                {ticketSaveError && <p className="error-inline">{ticketSaveError}</p>}
+                {ticketSaveSuccess && <p className="success-inline">{ticketSaveSuccess}</p>}
+              </div>
+
+              <div className="panel-section">
+                <h3>Ticket details</h3>
+                <div className="jira-property-shell">
+                  <div className="jira-property-row">
+                    <span className="detail-label">Status</span>
+                    {isEditingTicket ? (
+                      <select
+                        value={selectedTransitionId}
+                        onChange={(event) => setSelectedTransitionId(event.target.value)}
+                        disabled={savingTicket || ticketTransitions.length === 0}
+                      >
+                        <option value="">Keep current ({selectedIssueDetails.status})</option>
+                        {ticketTransitions.map((transition) => (
+                          <option key={transition.id} value={transition.id}>
+                            {transition.toStatus || transition.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className={`status-pill status-${selectedIssueDetails.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                        {selectedIssueDetails.status}
+                      </span>
+                    )}
+                  </div>
+                  <div className="jira-property-row">
                     <span className="detail-label">Type</span>
                     <span className="detail-value">{selectedIssueDetails.type}</span>
                   </div>
-                  <div>
+                  <div className="jira-property-row">
                     <span className="detail-label">Priority</span>
                     <span className="detail-value">{selectedIssueDetails.priority}</span>
                   </div>
-                  <div>
+                  <div className="jira-property-row">
                     <span className="detail-label">Assignee</span>
                     <span className="detail-value">{selectedIssueDetails.assignee}</span>
                   </div>
-                  <div>
+                  <div className="jira-property-row">
                     <span className="detail-label">Reporter</span>
                     <span className="detail-value">{selectedIssueDetails.reporter}</span>
                   </div>
-                  <div>
+                  <div className="jira-property-row">
                     <span className="detail-label">Creator</span>
                     <span className="detail-value">{selectedIssueDetails.creator}</span>
                   </div>
-                  <div>
+                  <div className="jira-property-row">
                     <span className="detail-label">Created</span>
                     <span className="detail-value">
                       {selectedIssueDetails.created
@@ -990,7 +1646,7 @@ function App() {
                         : 'Unknown'}
                     </span>
                   </div>
-                  <div>
+                  <div className="jira-property-row">
                     <span className="detail-label">Updated</span>
                     <span className="detail-value">
                       {selectedIssueDetails.updated
@@ -1090,7 +1746,8 @@ function App() {
                     {formattedFieldEntries.map((entry) => (
                       <details key={entry.key} className="field-accordion-item">
                         <summary>
-                          <span className="field-key">{entry.key}</span>
+                          <span className="field-key">{entry.label}</span>
+                          <span className="field-meta">{entry.key} · {entry.fieldType}</span>
                           <span className="field-preview">{entry.preview || 'No value'}</span>
                         </summary>
                         <pre className="field-value-viewer">
