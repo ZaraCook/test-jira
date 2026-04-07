@@ -8,6 +8,7 @@ const app = express()
 const port = process.env.PORT || 3001
 
 app.use(cors())
+app.use(express.json())
 
 function buildBoundedJql(rawJql) {
   const fallback = 'assignee = currentUser() ORDER BY updated DESC'
@@ -64,7 +65,11 @@ function jiraDescriptionToPlainText(description) {
   }
 
   const content = Array.isArray(description.content) ? description.content : []
-  return content.map((node) => adfNodeToText(node)).join('').trim()
+  return content
+    .map((node) => adfNodeToText(node))
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function parseGithubRepo(rawRepo) {
@@ -136,6 +141,66 @@ function getGithubHeaders() {
     Authorization: `Bearer ${token}`,
     'X-GitHub-Api-Version': '2022-11-28',
   }
+}
+
+function getJiraConfig() {
+  const baseUrl = process.env.JIRA_BASE_URL
+  const email = process.env.JIRA_EMAIL
+  const token = process.env.JIRA_API_TOKEN
+
+  if (!baseUrl || !email || !token) {
+    return null
+  }
+
+  return {
+    baseUrl: baseUrl.replace(/\/$/, ''),
+    auth: Buffer.from(`${email}:${token}`).toString('base64'),
+  }
+}
+
+function plainTextToAdf(text) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n')
+
+  const paragraphBlocks = normalized.split(/\n{2,}/)
+  const content = paragraphBlocks.map((block) => {
+    const lines = block.split('\n')
+    const paragraphContent = []
+
+    lines.forEach((line, index) => {
+      if (line) {
+        paragraphContent.push({
+          type: 'text',
+          text: line,
+        })
+      }
+
+      if (index < lines.length - 1) {
+        paragraphContent.push({ type: 'hardBreak' })
+      }
+    })
+
+    return {
+      type: 'paragraph',
+      content: paragraphContent,
+    }
+  })
+
+  if (content.length === 0) {
+    content.push({
+      type: 'paragraph',
+      content: [],
+    })
+  }
+
+  return {
+    type: 'doc',
+    version: 1,
+    content,
+  }
+}
+
+function toBase64Utf8(value) {
+  return Buffer.from(String(value || ''), 'utf8').toString('base64')
 }
 
 function extractGithubErrorMessage(payload, fallback) {
@@ -574,6 +639,333 @@ app.get('/api/github/repos/:owner/:repo/file', async (req, res) => {
   }
 })
 
+app.post('/api/github/repos/:owner/:repo/branches', async (req, res) => {
+  const headers = getGithubHeaders()
+  const { owner, repo } = req.params
+  const branchName = (req.body?.branchName || '').toString().trim()
+  const fromBranch = (req.body?.fromBranch || '').toString().trim()
+
+  if (!headers) {
+    return res.status(500).json({
+      error: 'Missing GitHub env var GITHUB_TOKEN',
+    })
+  }
+
+  if (!owner || !repo || !branchName) {
+    return res.status(400).json({
+      error: 'Missing owner, repository name, or new branch name',
+    })
+  }
+
+  if (/\s/.test(branchName)) {
+    return res.status(400).json({
+      error: 'Branch name cannot contain spaces',
+    })
+  }
+
+  try {
+    let sourceBranch = fromBranch
+
+    if (!sourceBranch) {
+      const repoUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+      const { response: repoResponse, payload: repoPayload } = await fetchGithubJson(repoUrl, headers)
+
+      if (!repoResponse.ok) {
+        return res.status(repoResponse.status).json({
+          error: 'Failed to resolve repository default branch',
+          details: extractGithubErrorMessage(repoPayload, repoResponse.statusText),
+        })
+      }
+
+      sourceBranch = (repoPayload?.default_branch || '').toString().trim()
+    }
+
+    if (!sourceBranch) {
+      return res.status(400).json({
+        error: 'Could not resolve source branch',
+      })
+    }
+
+    const sourceBranchUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(sourceBranch)}`
+    const { response: branchResponse, payload: branchPayload } = await fetchGithubJson(sourceBranchUrl, headers)
+
+    if (!branchResponse.ok) {
+      return res.status(branchResponse.status).json({
+        error: 'Failed to resolve source branch SHA',
+        details: extractGithubErrorMessage(branchPayload, branchResponse.statusText),
+      })
+    }
+
+    const sha = branchPayload?.commit?.sha
+
+    if (!sha) {
+      return res.status(500).json({
+        error: 'Could not resolve source branch commit SHA',
+      })
+    }
+
+    const createRefUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`
+    const createResponse = await fetch(createRefUrl, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ref: `refs/heads/${branchName}`,
+        sha,
+      }),
+    })
+
+    const createText = await createResponse.text()
+    let createPayload = null
+
+    if (createText) {
+      try {
+        createPayload = JSON.parse(createText)
+      } catch {
+        createPayload = null
+      }
+    }
+
+    if (!createResponse.ok) {
+      return res.status(createResponse.status).json({
+        error: 'Failed to create branch',
+        details: extractGithubErrorMessage(createPayload, createResponse.statusText),
+      })
+    }
+
+    return res.status(201).json({
+      created: true,
+      repo: `${owner}/${repo}`,
+      sourceBranch,
+      branch: {
+        name: branchName,
+        url: `https://github.com/${owner}/${repo}/tree/${encodeURIComponent(branchName)}`,
+      },
+    })
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Failed to create branch',
+      details: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
+
+app.post('/api/github/repos/:owner/:repo/commits', async (req, res) => {
+  const headers = getGithubHeaders()
+  const { owner, repo } = req.params
+  const branch = (req.body?.branch || '').toString().trim()
+  const message = (req.body?.message || '').toString().trim()
+  const changes = Array.isArray(req.body?.changes) ? req.body.changes : []
+
+  if (!headers) {
+    return res.status(500).json({
+      error: 'Missing GitHub env var GITHUB_TOKEN',
+    })
+  }
+
+  if (!owner || !repo || !branch || !message) {
+    return res.status(400).json({
+      error: 'Missing owner, repository, branch, or commit message',
+    })
+  }
+
+  if (changes.length === 0) {
+    return res.status(400).json({
+      error: 'No staged changes provided',
+    })
+  }
+
+  const normalizedChanges = changes
+    .map((change) => ({
+      path: (change?.path || '').toString().trim(),
+      content: (change?.content || '').toString(),
+    }))
+    .filter((change) => change.path)
+
+  if (normalizedChanges.length === 0) {
+    return res.status(400).json({
+      error: 'No valid file changes found',
+    })
+  }
+
+  try {
+    const branchUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}`
+    const { response: branchResponse, payload: branchPayload } = await fetchGithubJson(branchUrl, headers)
+
+    if (!branchResponse.ok) {
+      return res.status(branchResponse.status).json({
+        error: 'Failed to resolve branch',
+        details: extractGithubErrorMessage(branchPayload, branchResponse.statusText),
+      })
+    }
+
+    const latestSha = branchPayload?.commit?.sha
+
+    if (!latestSha) {
+      return res.status(500).json({
+        error: 'Failed to resolve latest branch commit SHA',
+      })
+    }
+
+    const commitUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits/${encodeURIComponent(latestSha)}`
+    const { response: latestCommitResponse, payload: latestCommitPayload } = await fetchGithubJson(commitUrl, headers)
+
+    if (!latestCommitResponse.ok) {
+      return res.status(latestCommitResponse.status).json({
+        error: 'Failed to resolve latest commit tree',
+        details: extractGithubErrorMessage(latestCommitPayload, latestCommitResponse.statusText),
+      })
+    }
+
+    const baseTreeSha = latestCommitPayload?.tree?.sha
+
+    if (!baseTreeSha) {
+      return res.status(500).json({
+        error: 'Base tree SHA not found',
+      })
+    }
+
+    const treeEntries = []
+
+    for (const change of normalizedChanges) {
+      const blobUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs`
+      const blobResponse = await fetch(blobUrl, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: toBase64Utf8(change.content),
+          encoding: 'base64',
+        }),
+      })
+
+      const blobText = await blobResponse.text()
+      const blobPayload = blobText ? JSON.parse(blobText) : {}
+
+      if (!blobResponse.ok) {
+        return res.status(blobResponse.status).json({
+          error: `Failed to create blob for ${change.path}`,
+          details: extractGithubErrorMessage(blobPayload, blobResponse.statusText),
+        })
+      }
+
+      treeEntries.push({
+        path: change.path,
+        mode: '100644',
+        type: 'blob',
+        sha: blobPayload?.sha,
+      })
+    }
+
+    const createTreeUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees`
+    const treeResponse = await fetch(createTreeUrl, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        base_tree: baseTreeSha,
+        tree: treeEntries,
+      }),
+    })
+
+    const treeText = await treeResponse.text()
+    const treePayload = treeText ? JSON.parse(treeText) : {}
+
+    if (!treeResponse.ok) {
+      return res.status(treeResponse.status).json({
+        error: 'Failed to create git tree',
+        details: extractGithubErrorMessage(treePayload, treeResponse.statusText),
+      })
+    }
+
+    const newTreeSha = treePayload?.sha
+
+    if (!newTreeSha) {
+      return res.status(500).json({
+        error: 'New tree SHA not found',
+      })
+    }
+
+    const createCommitUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits`
+    const createCommitResponse = await fetch(createCommitUrl, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        tree: newTreeSha,
+        parents: [latestSha],
+      }),
+    })
+
+    const createCommitText = await createCommitResponse.text()
+    const createCommitPayload = createCommitText ? JSON.parse(createCommitText) : {}
+
+    if (!createCommitResponse.ok) {
+      return res.status(createCommitResponse.status).json({
+        error: 'Failed to create commit',
+        details: extractGithubErrorMessage(createCommitPayload, createCommitResponse.statusText),
+      })
+    }
+
+    const newCommitSha = createCommitPayload?.sha
+
+    if (!newCommitSha) {
+      return res.status(500).json({
+        error: 'New commit SHA not found',
+      })
+    }
+
+    const updateRefUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs/heads/${encodeURIComponent(branch)}`
+    const updateRefResponse = await fetch(updateRefUrl, {
+      method: 'PATCH',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sha: newCommitSha,
+        force: false,
+      }),
+    })
+
+    const updateRefText = await updateRefResponse.text()
+    const updateRefPayload = updateRefText ? JSON.parse(updateRefText) : {}
+
+    if (!updateRefResponse.ok) {
+      return res.status(updateRefResponse.status).json({
+        error: 'Failed to push commit to branch',
+        details: extractGithubErrorMessage(updateRefPayload, updateRefResponse.statusText),
+      })
+    }
+
+    return res.status(201).json({
+      committed: true,
+      repo: `${owner}/${repo}`,
+      branch,
+      commit: {
+        sha: newCommitSha,
+        url: `https://github.com/${owner}/${repo}/commit/${newCommitSha}`,
+        message,
+      },
+      filesChanged: normalizedChanges.length,
+    })
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Failed to stage/commit/push changes',
+      details: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
+
 app.get('/api/issues', async (_req, res) => {
   console.log('Received request for /api/issues')
 
@@ -647,9 +1039,7 @@ app.get('/api/issues', async (_req, res) => {
 
 app.get('/api/issues/:issueKey', async (req, res) => {
   const issueKey = req.params.issueKey
-  const baseUrl = process.env.JIRA_BASE_URL
-  const email = process.env.JIRA_EMAIL
-  const token = process.env.JIRA_API_TOKEN
+  const jira = getJiraConfig()
 
   if (!issueKey) {
     return res.status(400).json({
@@ -657,24 +1047,21 @@ app.get('/api/issues/:issueKey', async (req, res) => {
     })
   }
 
-  if (!baseUrl || !email || !token) {
+  if (!jira) {
     return res.status(500).json({
       error:
         'Missing Jira env vars. Required: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN',
     })
   }
 
-  const cleanBaseUrl = baseUrl.replace(/\/$/, '')
-  const url = new URL(`${cleanBaseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}`)
+  const url = new URL(`${jira.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}`)
   url.searchParams.set('fields', '*all')
-
-  const auth = Buffer.from(`${email}:${token}`).toString('base64')
 
   try {
     const response = await fetch(url, {
       headers: {
         Accept: 'application/json',
-        Authorization: `Basic ${auth}`,
+        Authorization: `Basic ${jira.auth}`,
       },
     })
 
@@ -711,13 +1098,160 @@ app.get('/api/issues/:issueKey', async (req, res) => {
           ? fields.fixVersions.map((item) => item?.name).filter(Boolean)
           : [],
         description: jiraDescriptionToPlainText(fields?.description),
-        url: `${cleanBaseUrl}/browse/${issue.key}`,
+        url: `${jira.baseUrl}/browse/${issue.key}`,
         rawFields: fields,
       },
     })
   } catch (error) {
     return res.status(500).json({
       error: 'Unexpected error while loading Jira issue details',
+      details: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
+
+app.get('/api/issues/:issueKey/transitions', async (req, res) => {
+  const issueKey = req.params.issueKey
+  const jira = getJiraConfig()
+
+  if (!issueKey) {
+    return res.status(400).json({
+      error: 'Missing issue key',
+    })
+  }
+
+  if (!jira) {
+    return res.status(500).json({
+      error:
+        'Missing Jira env vars. Required: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN',
+    })
+  }
+
+  const url = `${jira.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Basic ${jira.auth}`,
+      },
+    })
+
+    const text = await response.text()
+    const payload = text ? JSON.parse(text) : {}
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: `Jira transitions request failed: ${response.status} ${response.statusText}`,
+        details: text,
+      })
+    }
+
+    const transitions = (Array.isArray(payload?.transitions) ? payload.transitions : []).map((item) => ({
+      id: item?.id || '',
+      name: item?.name || '',
+      toStatus: item?.to?.name || '',
+    }))
+
+    return res.json({
+      issueKey,
+      transitions,
+    })
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Unexpected error while loading Jira transitions',
+      details: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
+
+app.patch('/api/issues/:issueKey', async (req, res) => {
+  const issueKey = req.params.issueKey
+  const jira = getJiraConfig()
+
+  if (!issueKey) {
+    return res.status(400).json({
+      error: 'Missing issue key',
+    })
+  }
+
+  if (!jira) {
+    return res.status(500).json({
+      error:
+        'Missing Jira env vars. Required: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN',
+    })
+  }
+
+  const summary = typeof req.body?.summary === 'string' ? req.body.summary.trim() : undefined
+  const description = typeof req.body?.description === 'string' ? req.body.description : undefined
+  const transitionId = typeof req.body?.transitionId === 'string' ? req.body.transitionId.trim() : ''
+
+  const fields = {}
+
+  if (summary !== undefined) {
+    fields.summary = summary
+  }
+
+  if (description !== undefined) {
+    fields.description = plainTextToAdf(description)
+  }
+
+  try {
+    if (Object.keys(fields).length > 0) {
+      const updateUrl = `${jira.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}`
+      const updateResponse = await fetch(updateUrl, {
+        method: 'PUT',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Basic ${jira.auth}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ fields }),
+      })
+
+      const updateText = await updateResponse.text()
+
+      if (!updateResponse.ok) {
+        return res.status(updateResponse.status).json({
+          error: `Failed to update Jira issue: ${updateResponse.status} ${updateResponse.statusText}`,
+          details: updateText,
+        })
+      }
+    }
+
+    if (transitionId) {
+      const transitionUrl = `${jira.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`
+      const transitionResponse = await fetch(transitionUrl, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Basic ${jira.auth}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transition: {
+            id: transitionId,
+          },
+        }),
+      })
+
+      const transitionText = await transitionResponse.text()
+
+      if (!transitionResponse.ok) {
+        return res.status(transitionResponse.status).json({
+          error: `Failed to transition Jira issue: ${transitionResponse.status} ${transitionResponse.statusText}`,
+          details: transitionText,
+        })
+      }
+    }
+
+    return res.json({
+      updated: true,
+      issueKey,
+    })
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Unexpected error while updating Jira issue',
       details: error instanceof Error ? error.message : String(error),
     })
   }
