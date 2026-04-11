@@ -2,7 +2,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import express from 'express'
 
-dotenv.config()
+dotenv.config({ path: '.env' })
 
 const app = express()
 const port = process.env.PORT || 3001
@@ -156,6 +156,417 @@ function getJiraConfig() {
     baseUrl: baseUrl.replace(/\/$/, ''),
     auth: Buffer.from(`${email}:${token}`).toString('base64'),
   }
+}
+
+function getAiConfig() {
+  const model = (process.env.AI_MODEL || 'Qwen/Qwen2.5-Coder-32B-Instruct').trim()
+  const apiKey = (process.env.AI_API_KEY || '').trim()
+
+  if (!apiKey.trim()) {
+    return null
+  }
+
+  return {
+    model,
+    apiKey,
+    baseUrl: 'https://router.huggingface.co/v1',
+  }
+}
+
+function extractJsonObject(text) {
+  if (!text || typeof text !== 'string') {
+    return null
+  }
+
+  const trimmed = text.trim()
+
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    // fall through
+  }
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
+  if (fencedMatch?.[1]) {
+    try {
+      return JSON.parse(fencedMatch[1])
+    } catch {
+      // fall through
+    }
+  }
+
+  const firstBrace = trimmed.indexOf('{')
+  const lastBrace = trimmed.lastIndexOf('}')
+
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = trimmed.slice(firstBrace, lastBrace + 1)
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+function normalizeAiResponse(payload, fallbackText) {
+  const safe = payload && typeof payload === 'object' ? payload : {}
+
+  const branchSuggestions = Array.isArray(safe.branchSuggestions)
+    ? safe.branchSuggestions.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
+    : []
+
+  const fixPlan = Array.isArray(safe.fixPlan)
+    ? safe.fixPlan.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 10)
+    : []
+
+  const planSteps = Array.isArray(safe.planSteps)
+    ? safe.planSteps.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 10)
+    : []
+
+  const implementationChanges = Array.isArray(safe.implementationChanges)
+    ? safe.implementationChanges
+        .map((item) => ({
+          path: typeof item?.path === 'string' ? item.path.trim() : '',
+          action: ['create', 'update', 'delete'].includes(String(item?.action || '').toLowerCase())
+            ? String(item.action).toLowerCase()
+            : 'update',
+          content: typeof item?.content === 'string' ? item.content : '',
+          reason: typeof item?.reason === 'string' ? item.reason.trim() : '',
+        }))
+        .filter((item) => item.path)
+        .slice(0, 20)
+    : []
+
+  return {
+    ticketExplanation:
+      typeof safe.ticketExplanation === 'string' && safe.ticketExplanation.trim()
+        ? safe.ticketExplanation.trim()
+        : fallbackText,
+    updatedSummary:
+      typeof safe.updatedSummary === 'string' && safe.updatedSummary.trim()
+        ? safe.updatedSummary.trim()
+        : '',
+    updatedDescription:
+      typeof safe.updatedDescription === 'string' && safe.updatedDescription.trim()
+        ? safe.updatedDescription.trim()
+        : '',
+    ticketUpdateReasoning:
+      typeof safe.ticketUpdateReasoning === 'string' && safe.ticketUpdateReasoning.trim()
+        ? safe.ticketUpdateReasoning.trim()
+        : '',
+    branchSuggestions,
+    fixPlan,
+    planSteps: planSteps.length > 0 ? planSteps : fixPlan,
+    planSummary:
+      typeof safe.planSummary === 'string' && safe.planSummary.trim() ? safe.planSummary.trim() : '',
+    reviewNotes:
+      typeof safe.reviewNotes === 'string' && safe.reviewNotes.trim() ? safe.reviewNotes.trim() : '',
+    implementationSummary:
+      typeof safe.implementationSummary === 'string' && safe.implementationSummary.trim()
+        ? safe.implementationSummary.trim()
+        : '',
+    implementationChanges,
+  }
+}
+
+function enforceSnapshotConsistency(aiResult, snapshot) {
+  if (!aiResult || !snapshot) {
+    return aiResult
+  }
+
+  const totalFiles = Number(snapshot.fileCount || 0)
+  const readableFiles = Number(snapshot.readableFileCount || 0)
+
+  if (totalFiles <= 0) {
+    return aiResult
+  }
+
+  const contradictionPattern = /\bempty\b|\b0\s+files?\b/i
+  const snapshotSummary = `Repository snapshot shows ${totalFiles} file(s) on this branch (${readableFiles} readable text/code file(s)).`
+
+  const next = { ...aiResult }
+
+  if (typeof next.ticketExplanation === 'string' && contradictionPattern.test(next.ticketExplanation)) {
+    next.ticketExplanation = `${snapshotSummary} ${next.ticketExplanation}`.trim()
+  }
+
+  if (typeof next.ticketUpdateReasoning === 'string' && contradictionPattern.test(next.ticketUpdateReasoning)) {
+    next.ticketUpdateReasoning = `${snapshotSummary} ${next.ticketUpdateReasoning}`.trim()
+  }
+
+  return next
+}
+
+function inferAiTask(promptText, issueSummary) {
+  const prompt = `${promptText || ''} ${issueSummary?.summary || ''} ${issueSummary?.description || ''}`.toLowerCase()
+
+  if (/review plan|approve plan|check the plan|plan review/.test(prompt)) {
+    return 'review-plan'
+  }
+
+  if (/implement changes|implement the changes|apply the plan|build the changes|code the changes/.test(prompt)) {
+    return 'implement-changes'
+  }
+
+  if (/branch/.test(prompt)) {
+    return 'suggest-branches'
+  }
+
+  if (/implement|repo|structure|files?|walk me through|entry point|where should/i.test(prompt)) {
+    return 'suggest-implementation'
+  }
+
+  if (/update|rewrite|draft|edit jira|edit the ticket|improve the ticket|ticket update/.test(prompt)) {
+    return 'update-ticket'
+  }
+
+  if (/fix plan|how (?:do i|to) fix|start fixing|investigate|first step/.test(prompt)) {
+    return 'suggest-fix'
+  }
+
+  return 'explain-ticket'
+}
+
+function buildRepoSnapshot(repoFiles) {
+  const files = Array.isArray(repoFiles)
+    ? repoFiles.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+
+  const maxFiles = 250
+  const visibleFiles = files.slice(0, maxFiles)
+  const omittedCount = Math.max(0, files.length - visibleFiles.length)
+
+  return {
+    fileCount: files.length,
+    omittedCount,
+    files: visibleFiles,
+  }
+}
+
+const TEXT_FILE_EXTENSIONS = new Set([
+  '.c',
+  '.cc',
+  '.cpp',
+  '.css',
+  '.editorconfig',
+  '.env',
+  '.gql',
+  '.graphql',
+  '.gitignore',
+  '.go',
+  '.h',
+  '.hpp',
+  '.html',
+  '.java',
+  '.js',
+  '.jsx',
+  '.json',
+  '.less',
+  '.md',
+  '.mjs',
+  '.py',
+  '.rb',
+  '.rs',
+  '.scss',
+  '.sh',
+  '.sql',
+  '.ts',
+  '.tsx',
+  '.txt',
+  '.vue',
+  '.yaml',
+  '.yml',
+])
+
+const BINARY_FILE_EXTENSIONS = new Set([
+  '.7z',
+  '.avi',
+  '.bin',
+  '.bmp',
+  '.dll',
+  '.doc',
+  '.docx',
+  '.exe',
+  '.gif',
+  '.ico',
+  '.jar',
+  '.jpeg',
+  '.jpg',
+  '.mp3',
+  '.mp4',
+  '.pdf',
+  '.png',
+  '.psd',
+  '.svg',
+  '.tar',
+  '.tif',
+  '.tiff',
+  '.woff',
+  '.woff2',
+  '.xls',
+  '.xlsx',
+  '.zip',
+])
+
+function isLikelyTextFile(filePath) {
+  const lowerPath = String(filePath || '').toLowerCase()
+
+  if (!lowerPath) {
+    return false
+  }
+
+  if (lowerPath.endsWith('readme') || lowerPath.endsWith('license') || lowerPath.endsWith('changelog')) {
+    return true
+  }
+
+  const extensionMatch = lowerPath.match(/\.[^./\\]+$/)
+  const extension = extensionMatch ? extensionMatch[0] : ''
+
+  if (BINARY_FILE_EXTENSIONS.has(extension)) {
+    return false
+  }
+
+  if (TEXT_FILE_EXTENSIONS.has(extension)) {
+    return true
+  }
+
+  return !extension
+}
+
+function decodeGithubBlobContent(payload) {
+  const rawContent = typeof payload?.content === 'string' ? payload.content.replace(/\n/g, '') : ''
+
+  if (!rawContent) {
+    return ''
+  }
+
+  try {
+    return Buffer.from(rawContent, payload?.encoding || 'base64').toString('utf8')
+  } catch {
+    return ''
+  }
+}
+
+async function fetchGithubRepoSnapshot(owner, repo, branch, headers) {
+  const maxFiles = Number(process.env.GITHUB_MAX_SNAPSHOT_FILES || 250)
+  const maxCharsPerFile = Number(process.env.GITHUB_MAX_SNAPSHOT_FILE_CHARS || 12000)
+  const maxTotalChars = Number(process.env.GITHUB_MAX_SNAPSHOT_TOTAL_CHARS || 200000)
+
+  const branchUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}`
+  const { response: branchResponse, payload: branchPayload } = await fetchGithubJson(branchUrl, headers)
+
+  if (!branchResponse.ok) {
+    throw new Error(extractGithubErrorMessage(branchPayload, branchResponse.statusText))
+  }
+
+  const treeSha = branchPayload?.commit?.commit?.tree?.sha
+
+  if (!treeSha) {
+    throw new Error('Branch tree SHA not found')
+  }
+
+  const treeUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`
+  const { response: treeResponse, payload: treePayload } = await fetchGithubJson(treeUrl, headers)
+
+  if (!treeResponse.ok) {
+    throw new Error(extractGithubErrorMessage(treePayload, treeResponse.statusText))
+  }
+
+  const tree = Array.isArray(treePayload?.tree) ? treePayload.tree : []
+  const blobs = tree
+    .filter((item) => item?.type === 'blob' && typeof item?.path === 'string')
+    .map((item) => ({
+      path: item.path,
+      sha: item.sha,
+      size: Number(item.size || 0),
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+
+  const files = []
+  let totalContentChars = 0
+  let omittedCount = 0
+
+  for (const blob of blobs) {
+    if (files.length >= maxFiles || totalContentChars >= maxTotalChars) {
+      omittedCount += 1
+      continue
+    }
+
+    if (!isLikelyTextFile(blob.path)) {
+      files.push({
+        path: blob.path,
+        content: '',
+        readable: false,
+        skippedReason: 'binary-or-unsupported-file-type',
+      })
+      continue
+    }
+
+    const blobUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs/${encodeURIComponent(blob.sha)}`
+    const { response: blobResponse, payload: blobPayload } = await fetchGithubJson(blobUrl, headers)
+
+    if (!blobResponse.ok) {
+      files.push({
+        path: blob.path,
+        content: '',
+        readable: false,
+        skippedReason: extractGithubErrorMessage(blobPayload, blobResponse.statusText),
+      })
+      continue
+    }
+
+    const decodedContent = decodeGithubBlobContent(blobPayload)
+    const trimmedContent = decodedContent.slice(0, maxCharsPerFile)
+    const truncated = decodedContent.length > trimmedContent.length
+
+    totalContentChars += trimmedContent.length
+    files.push({
+      path: blob.path,
+      content: trimmedContent,
+      readable: true,
+      truncated,
+      size: blob.size,
+    })
+  }
+
+  return {
+    repo: `${owner}/${repo}`,
+    branch,
+    fileCount: blobs.length,
+    omittedCount,
+    truncated: omittedCount > 0 || totalContentChars >= maxTotalChars,
+    files,
+  }
+}
+
+function formatRepoSnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.files)) {
+    return 'Repository snapshot unavailable.'
+  }
+
+  const sections = []
+
+  for (const file of snapshot.files) {
+    if (!file?.path) {
+      continue
+    }
+
+    sections.push([
+      `File: ${file.path}`,
+      file.readable === false
+        ? `[Skipped ${file.skippedReason || 'unreadable file'}]`
+        : file.content || '[Empty file]',
+      file.truncated ? '[Content truncated]' : '',
+    ].filter(Boolean).join('\n'))
+  }
+
+  if (snapshot.omittedCount > 0) {
+    sections.push(`Omitted files: ${snapshot.omittedCount}`)
+  }
+
+  return sections.join('\n\n---\n\n')
 }
 
 function plainTextToAdf(text) {
@@ -1276,6 +1687,209 @@ app.get('/api/issues/:issueKey/links', async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: 'Unexpected error while fetching GitHub links',
+      details: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
+
+app.post('/api/ai/assist', async (req, res) => {
+  const ai = getAiConfig()
+  const githubHeaders = getGithubHeaders()
+
+  if (!ai) {
+    return res.status(500).json({
+      error: 'Missing AI provider credentials. Set AI_API_KEY in .env.',
+    })
+  }
+
+  if (!githubHeaders) {
+    return res.status(500).json({
+      error: 'Missing GitHub env var GITHUB_TOKEN',
+    })
+  }
+
+  const task = (req.body?.task || '').toString().trim()
+  const userExplanation = (req.body?.userExplanation || '').toString().trim()
+  const planDraft = (req.body?.planDraft || '').toString().trim()
+  const approvedPlan = (req.body?.approvedPlan || '').toString().trim()
+  const issue = req.body?.issue && typeof req.body.issue === 'object' ? req.body.issue : null
+  const repo = (req.body?.repo || '').toString().trim()
+  const branch = (req.body?.branch || '').toString().trim()
+  const existingBranches = Array.isArray(req.body?.existingBranches)
+    ? req.body.existingBranches.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 100)
+    : []
+
+  if (!issue || !issue.key) {
+    return res.status(400).json({
+      error: 'Missing issue payload',
+    })
+  }
+
+  const issueSummary = {
+    key: String(issue.key || ''),
+    summary: String(issue.summary || ''),
+    description: String(issue.description || ''),
+    status: String(issue.status || ''),
+    type: String(issue.type || ''),
+    priority: String(issue.priority || ''),
+    assignee: String(issue.assignee || ''),
+    labels: Array.isArray(issue.labels) ? issue.labels.map((item) => String(item || '')).slice(0, 50) : [],
+    components: Array.isArray(issue.components)
+      ? issue.components.map((item) => String(item || '')).slice(0, 50)
+      : [],
+  }
+
+  const parsedRepo = parseGithubRepo(repo)
+
+  if (!parsedRepo || !branch) {
+    return res.status(400).json({
+      error: 'Select a repository and branch before asking AI to review code or implement changes.',
+    })
+  }
+
+  let repoSnapshot = buildRepoSnapshot(req.body?.repoFiles)
+
+  try {
+    repoSnapshot = await fetchGithubRepoSnapshot(parsedRepo.owner, parsedRepo.repo, branch, githubHeaders)
+  } catch (snapshotError) {
+    return res.status(500).json({
+      error: 'Failed to load repository snapshot',
+      details: snapshotError instanceof Error ? snapshotError.message : String(snapshotError),
+    })
+  }
+
+  const taskInstructions = {
+    'explain-ticket':
+      'Explain the Jira issue in plain language for engineers and product stakeholders. Mention the likely problem, expected behavior, risk, and what done looks like.',
+    'update-ticket':
+      'Use the user explanation to propose improved Jira summary and description. Keep changes concrete and actionable.',
+    'suggest-branches':
+      'Suggest practical Git branch names for implementing this issue. Follow branch naming conventions and include the issue key in names.',
+    'suggest-fix':
+      'Suggest how to start fixing this issue with an ordered action plan including investigation, coding, testing, and rollout checks.',
+    'review-plan':
+      'Review the draft implementation plan. Improve the wording, identify missing steps or risks, and return a refined plan that is ready for approval.',
+    'suggest-implementation':
+      'Use the repository file contents and branch context to suggest a practical implementation plan. Identify likely entry points, files to inspect first, and a step-by-step approach to make the change safely.',
+    'implement-changes':
+      'Use the approved plan and the repository snapshot to implement the change. Return concrete file edits with file paths, full replacement content, and a short reason for each file change.',
+  }
+
+  const resolvedTask = task === 'auto' || !task || !taskInstructions[task] ? inferAiTask(userExplanation, issueSummary) : task
+
+  if (!taskInstructions[resolvedTask]) {
+    return res.status(400).json({
+      error:
+        'Unsupported task. Supported: explain-ticket, update-ticket, suggest-branches, suggest-fix, review-plan, suggest-implementation, implement-changes',
+    })
+  }
+
+  const systemPrompt = [
+    'You are an AI engineering assistant for Jira and GitHub workflows.',
+    'Always return valid JSON only with this shape:',
+    '{',
+    '  "ticketExplanation": string,',
+    '  "updatedSummary": string,',
+    '  "updatedDescription": string,',
+    '  "ticketUpdateReasoning": string,',
+    '  "branchSuggestions": string[],',
+    '  "fixPlan": string[],',
+    '  "planSteps": string[],',
+    '  "planSummary": string,',
+    '  "reviewNotes": string,',
+    '  "implementationSummary": string,',
+    '  "implementationChanges": [{ "path": string, "action": "create" | "update" | "delete", "content": string, "reason": string }]',
+    '}',
+    'Fill only fields relevant to the task; use empty strings or empty arrays otherwise.',
+    'Do not include markdown or code fences.',
+  ].join('\n')
+
+  const repoFilePreview = formatRepoSnapshot(repoSnapshot)
+
+  const userPrompt = [
+    `Task: ${resolvedTask}`,
+    `Instruction: ${taskInstructions[resolvedTask]}`,
+    '',
+    'Issue context:',
+    JSON.stringify(issueSummary, null, 2),
+    '',
+    `Selected repository: ${repo || 'N/A'}`,
+    `Selected branch: ${branch || 'N/A'}`,
+    `Existing branch names: ${existingBranches.join(', ') || 'N/A'}`,
+    `Repository file count: ${repoSnapshot.fileCount}`,
+    repoSnapshot.omittedCount > 0 ? `Omitted files: ${repoSnapshot.omittedCount}` : '',
+    '',
+    'Repository snapshot with file contents:',
+    repoFilePreview,
+    '',
+    `User explanation: ${userExplanation || 'N/A'}`,
+    '',
+    `Draft plan: ${planDraft || 'N/A'}`,
+    `Approved plan: ${approvedPlan || 'N/A'}`,
+  ].join('\n')
+
+  try {
+    const headers = {
+      Authorization: `Bearer ${ai.apiKey}`,
+      'Content-Type': 'application/json',
+    }
+
+    const response = await fetch(`${ai.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: ai.model,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    })
+
+    const text = await response.text()
+    let payload = null
+
+    if (text) {
+      try {
+        payload = JSON.parse(text)
+      } catch {
+        payload = null
+      }
+    }
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: 'LLM request failed',
+        details: extractGithubErrorMessage(payload, response.statusText) || text,
+      })
+    }
+
+    const content = payload?.choices?.[0]?.message?.content
+    const parsed = extractJsonObject(typeof content === 'string' ? content : '')
+    const normalized = normalizeAiResponse(parsed, typeof content === 'string' ? content.trim() : '')
+    const snapshotSummary = {
+      repo: repoSnapshot.repo,
+      branch: repoSnapshot.branch,
+      fileCount: repoSnapshot.fileCount,
+      omittedCount: repoSnapshot.omittedCount,
+      truncated: repoSnapshot.truncated,
+      readableFileCount: Array.isArray(repoSnapshot.files)
+        ? repoSnapshot.files.filter((file) => file?.readable !== false).length
+        : 0,
+    }
+
+    const consistentResult = enforceSnapshotConsistency(normalized, snapshotSummary)
+
+    return res.json({
+      model: ai.model,
+      task: resolvedTask,
+      repoSnapshot: snapshotSummary,
+      result: consistentResult,
+    })
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Unexpected error while calling LLM provider',
       details: error instanceof Error ? error.message : String(error),
     })
   }

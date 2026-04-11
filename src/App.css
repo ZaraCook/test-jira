@@ -984,3 +984,141 @@ a:hover {
 .cm-completionDetail {
   color: var(--text-2) !important;
 }
+
+.ai-helper-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ai-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ai-mode-pill {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text-1);
+  border-radius: 999px;
+  padding: 9px 13px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ai-mode-pill:hover,
+.ai-mode-pill-active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.ai-current-mode {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+}
+
+.ai-helper-chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-1);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ai-helper-chip:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.ai-workspace-section {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.plan-review-card {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(245, 249, 255, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+  box-shadow: 0 10px 24px rgba(29, 53, 87, 0.06);
+}
+
+.plan-review-card h4 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.plan-review-card label {
+  margin-top: 12px;
+}
+
+.plan-textarea {
+  min-height: 160px;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.ai-actions-stack {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.ai-actions-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.secondary-refresh-btn {
+  background: #fff;
+  color: var(--text-1);
+}
+
+.secondary-refresh-btn:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.ai-suggestion-box {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+}
+
+.ai-suggestion-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-suggestion-pill {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-1);
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ai-suggestion-pill:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
