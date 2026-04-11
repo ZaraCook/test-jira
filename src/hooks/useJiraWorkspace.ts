@@ -9,7 +9,10 @@ import type { JiraIssue } from '../types'
 import { getDefaultBranchName } from '../utils/github'
 
 type JiraWorkspaceState = {
+  issues: JiraIssue[]
   selectedIssue: JiraIssue | null
+  selectIssue: (issue: JiraIssue) => void
+  clearSelectedIssue: () => void
   issueBrowserProps: IssueBrowserPageProps
   githubPanelProps: GithubPanelProps
   ticketWorkspaceProps: Omit<TicketWorkspacePageProps, 'githubPanel'> | null
@@ -185,7 +188,10 @@ export function useJiraWorkspace(): JiraWorkspaceState {
     : null
 
   return {
+    issues: issue.issues,
     selectedIssue: issue.selectedIssue,
+    selectIssue: handleSelectIssue,
+    clearSelectedIssue: closeDetails,
     issueBrowserProps,
     githubPanelProps,
     ticketWorkspaceProps,
