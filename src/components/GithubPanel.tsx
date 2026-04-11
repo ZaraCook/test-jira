@@ -147,11 +147,15 @@ export function GithubPanel({
     onAiPromptChange(prompt)
   }
 
+  const selectCapability = (mode: AiFlowMode, prompt: string) => {
+    onModeSelect(mode, prompt)
+  }
+
   return (
     <section className="github-side">
       <div className="panel-section">
         <div className="section-title-row">
-          <h3>GitHub</h3>
+          <h3>1. Connect repository</h3>
           <button
             type="button"
             className={`connect-btn ${githubConnected ? 'connect-btn-connected' : ''}`}
@@ -161,6 +165,7 @@ export function GithubPanel({
             {loadingGithubRepos ? 'Connecting...' : githubConnected ? 'Disconnect GitHub' : 'Connect GitHub'}
           </button>
         </div>
+        <p className="field-meta">Choose the repository and working branch for this ticket.</p>
 
         <div className="github-controls">
           <label>
@@ -191,83 +196,142 @@ export function GithubPanel({
             </select>
           </label>
         </div>
+      </div>
 
-        <div className="panel-section ai-workspace-section">
-          <div className="section-title-row">
-            <h3>AI assistant</h3>
-            <span className="field-meta">Uses the selected repo and branch</span>
-          </div>
+      <div className="panel-section ai-workspace-section">
+        <div className="section-title-row">
+          <h3>2. Plan with AI</h3>
+          <span className="field-meta">Uses the selected repo and branch</span>
+        </div>
 
-          <div className="github-controls">
-            <label>
-              Describe what you want the AI to do
-              <textarea
-                className="ticket-textarea"
-                rows={4}
-                placeholder="Example: Read the repository structure and suggest how to implement this Jira ticket."
-                value={aiPrompt}
-                onChange={(event) => onAiPromptChange(event.target.value)}
-                disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch}
-              />
-            </label>
-          </div>
+        <div className="ai-capability-grid">
+          <button
+            type="button"
+            className="ai-capability-card"
+            onClick={() =>
+              selectCapability(
+                'explain-ticket',
+                'Explain this ticket clearly for both developers and project managers, including risks, assumptions, and expected outcome.',
+              )
+            }
+          >
+            <span className="ai-capability-title">Explain ticket</span>
+            <span className="ai-capability-desc">Break down scope, business context, and technical intent.</span>
+          </button>
 
-          <div className="ai-mode-row">
-            <button
-              type="button"
-              className={`ai-mode-pill ${aiFlowMode === 'explain-ticket' ? 'ai-mode-pill-active' : ''}`}
-              onClick={() => onModeSelect('explain-ticket', 'Explain this Jira ticket in plain English.')}
-            >
-              Explain ticket
-            </button>
+          <button
+            type="button"
+            className="ai-capability-card"
+            onClick={() =>
+              selectCapability(
+                'read-repo',
+                'Read this repository and tell me exactly where to start: which files to inspect first, what to change, and why.',
+              )
+            }
+          >
+            <span className="ai-capability-title">Read repo and locate files</span>
+            <span className="ai-capability-desc">Identify entry points, target files, and implementation order.</span>
+          </button>
 
-            <button
-              type="button"
-              className={`ai-mode-pill ${aiFlowMode === 'read-repo' ? 'ai-mode-pill-active' : ''}`}
-              onClick={() => onModeSelect('read-repo', 'Read the repository structure and branch files, then suggest how to implement this ticket.')}
-            >
-              Read repo
-            </button>
+          <button
+            type="button"
+            className="ai-capability-card"
+            onClick={() =>
+              selectCapability(
+                'suggest-plan',
+                'Suggest a full implementation plan, including branch naming, files to create/update, and validation steps.',
+              )
+            }
+          >
+            <span className="ai-capability-title">Suggest implementation plan</span>
+            <span className="ai-capability-desc">Generate a practical step-by-step plan with file-level guidance.</span>
+          </button>
 
-            <button
-              type="button"
-              className={`ai-mode-pill ${aiFlowMode === 'suggest-plan' ? 'ai-mode-pill-active' : ''}`}
-              onClick={() => onModeSelect('suggest-plan', 'Suggest a step-by-step plan to implement this ticket.')}
-            >
-              Suggest plan
-            </button>
+          <button
+            type="button"
+            className="ai-capability-card"
+            onClick={() =>
+              selectCapability(
+                'implement-plan',
+                'Implement the approved plan. Create new files when needed, update existing files, and prepare staged changes.',
+              )
+            }
+          >
+            <span className="ai-capability-title">Implement and prepare changes</span>
+            <span className="ai-capability-desc">Generate concrete file changes ready to stage, commit, and push.</span>
+          </button>
+        </div>
 
-            <button
-              type="button"
-              className={`ai-mode-pill ${aiFlowMode === 'edit-plan' ? 'ai-mode-pill-active' : ''}`}
-              onClick={() => onModeSelect('edit-plan', 'Review this draft implementation plan and improve it before approval.')}
-            >
-              Edit plan
-            </button>
-
-            <button
-              type="button"
-              className={`ai-mode-pill ${aiFlowMode === 'implement-plan' ? 'ai-mode-pill-active' : ''}`}
-              onClick={() => onModeSelect('implement-plan', 'Implement the approved plan using the repository contents.')}
-            >
-              Implement plan
-            </button>
-          </div>
-
-          <div className="workspace-actions ai-actions-inline">
-            <button
-              type="button"
-              className="refresh-btn"
-              onClick={runSelectedAiFlow}
+        <div className="github-controls">
+          <label>
+            AI instruction
+            <textarea
+              className="ticket-textarea"
+              rows={4}
+              placeholder="Example: Read the repo and tell me which files to start in, then suggest an implementation approach."
+              value={aiPrompt}
+              onChange={(event) => onAiPromptChange(event.target.value)}
               disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch}
-            >
-              {aiLoadingTask ? 'Thinking...' : 'Ask AI'}
-            </button>
+            />
+          </label>
+        </div>
 
-            <span className="field-meta ai-current-mode">Current mode: {currentAiModeLabel}</span>
-          </div>
+        <div className="ai-mode-row">
+          <button
+            type="button"
+            className={`ai-mode-pill ${aiFlowMode === 'explain-ticket' ? 'ai-mode-pill-active' : ''}`}
+            onClick={() => onModeSelect('explain-ticket', 'Explain this Jira ticket in plain English.')}
+          >
+            Explain
+          </button>
 
-          {aiSnapshotSummary && <p className="field-meta">{aiSnapshotSummary}</p>}
+          <button
+            type="button"
+            className={`ai-mode-pill ${aiFlowMode === 'read-repo' ? 'ai-mode-pill-active' : ''}`}
+            onClick={() => onModeSelect('read-repo', 'Read the repository structure and branch files, then suggest how to implement this ticket.')}
+          >
+            Read repo
+          </button>
+
+          <button
+            type="button"
+            className={`ai-mode-pill ${aiFlowMode === 'suggest-plan' ? 'ai-mode-pill-active' : ''}`}
+            onClick={() => onModeSelect('suggest-plan', 'Suggest a step-by-step plan to implement this ticket.')}
+          >
+            Plan
+          </button>
+
+          <button
+            type="button"
+            className={`ai-mode-pill ${aiFlowMode === 'edit-plan' ? 'ai-mode-pill-active' : ''}`}
+            onClick={() => onModeSelect('edit-plan', 'Review this draft implementation plan and improve it before approval.')}
+          >
+            Review plan
+          </button>
+
+          <button
+            type="button"
+            className={`ai-mode-pill ${aiFlowMode === 'implement-plan' ? 'ai-mode-pill-active' : ''}`}
+            onClick={() => onModeSelect('implement-plan', 'Implement the approved plan using the repository contents.')}
+          >
+            Implement
+          </button>
+        </div>
+
+        <div className="workspace-actions ai-actions-inline">
+          <button
+            type="button"
+            className="refresh-btn"
+            onClick={runSelectedAiFlow}
+            disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch}
+          >
+            {aiLoadingTask ? 'Thinking...' : 'Run selected AI mode'}
+          </button>
+
+          <span className="field-meta ai-current-mode">Current mode: {currentAiModeLabel}</span>
+        </div>
+
+        {aiSnapshotSummary && <p className="field-meta">{aiSnapshotSummary}</p>}
 
           {aiFlowMode === 'edit-plan' && (
             <div className="plan-review-card">
@@ -344,12 +408,36 @@ export function GithubPanel({
             </div>
           )}
 
-          <div className="ai-helper-row">
-            <button type="button" className="ai-helper-chip" onClick={() => onAiPromptChange('Explain this ticket in plain English.')}>Explain</button>
-            <button type="button" className="ai-helper-chip" onClick={() => onAiPromptChange('Draft an improved Jira summary and description from this ticket.')}>Draft update</button>
-            <button type="button" className="ai-helper-chip" onClick={() => onAiPromptChange('Suggest the best way to start fixing this issue.')}>Suggest fix plan</button>
-            <button type="button" className="ai-helper-chip" onClick={() => onAiPromptChange('Suggest branch names for this Jira ticket.')}>Branch names</button>
-          </div>
+        <div className="ai-helper-row">
+          <button
+            type="button"
+            className="ai-helper-chip"
+            onClick={() => onAiPromptChange('Explain this ticket in plain English for both engineers and project managers.')}
+          >
+            Explain for team
+          </button>
+          <button
+            type="button"
+            className="ai-helper-chip"
+            onClick={() => onAiPromptChange('Read the repo and tell me exactly which files to look at first and where to start implementation.')}
+          >
+            Find start files
+          </button>
+          <button
+            type="button"
+            className="ai-helper-chip"
+            onClick={() => onAiPromptChange('Suggest branch names and a clean implementation sequence for this ticket.')}
+          >
+            Branch + plan
+          </button>
+          <button
+            type="button"
+            className="ai-helper-chip"
+            onClick={() => onAiPromptChange('Generate implementation changes, including creating files if needed, and prepare everything to stage.')}
+          >
+            Generate full fix
+          </button>
+        </div>
 
           <div className="workspace-actions ai-actions-stack">
             {Array.isArray(aiResult?.branchSuggestions) && aiResult.branchSuggestions.length > 0 && (
@@ -435,10 +523,10 @@ export function GithubPanel({
               </details>
             </div>
           )}
-        </div>
+      </div>
 
-        <div className="panel-section branch-create-section">
-          <h3>Create branch</h3>
+      <div className="panel-section branch-create-section">
+          <h3>3. Create branch</h3>
           <div className="github-controls">
             <label>
               New branch name
@@ -465,11 +553,11 @@ export function GithubPanel({
 
           {branchCreateError && <p className="error-inline">{branchCreateError}</p>}
           {branchCreateSuccess && <p className="success-inline">{branchCreateSuccess}</p>}
-        </div>
+      </div>
 
-        <div className="panel-section branch-create-section">
-          <h3>Edit files and push</h3>
-          <div className="github-controls">
+      <div className="panel-section branch-create-section">
+          <h3>4. Stage changes and push</h3>
+          <div className="github-controls github-form-grid">
             <label>
               File action
               <select
@@ -530,43 +618,48 @@ export function GithubPanel({
               </label>
             )}
 
-            <label>
-              File content
-              <ErrorBoundary
-                fallback={
-                  <textarea
-                    className="ticket-textarea"
-                    rows={8}
-                    value={editorFileContent}
-                    onChange={(event) => onEditorFileContentChange(event.target.value)}
-                    disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
-                  />
-                }
-              >
-                <CodeEditor
-                  value={editorFileContent}
-                  onChange={(value) => onEditorFileContentChange(value)}
-                  disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
-                  fileName={fileMode === 'existing' ? selectedFile : editorFilePath}
-                />
-              </ErrorBoundary>
-            </label>
           </div>
 
-          {fileMode === 'existing' && selectedFile && <p className="field-meta">Editing existing file: {selectedFile}</p>}
+            <div className="github-editor-card">
+              <label>
+                File content
+                <ErrorBoundary
+                  fallback={
+                    <textarea
+                      className="ticket-textarea"
+                      rows={8}
+                      value={editorFileContent}
+                      onChange={(event) => onEditorFileContentChange(event.target.value)}
+                      disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
+                    />
+                  }
+                >
+                  <div className="github-editor-shell">
+                    <CodeEditor
+                      value={editorFileContent}
+                      onChange={(value) => onEditorFileContentChange(value)}
+                      disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting}
+                      fileName={fileMode === 'existing' ? selectedFile : editorFilePath}
+                    />
+                  </div>
+                </ErrorBoundary>
+              </label>
 
-          {fileMode === 'new' && <p className="field-meta">Create a new file by entering a path and content.</p>}
+              {fileMode === 'existing' && selectedFile && <p className="field-meta">Editing existing file: {selectedFile}</p>}
 
-          <div className="workspace-actions">
-            <button
-              type="button"
-              className="refresh-btn"
-              onClick={handleStageFileChange}
-              disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting || !editorFilePath.trim()}
-            >
-              Stage file change
-            </button>
-          </div>
+              {fileMode === 'new' && <p className="field-meta">Create a new file by entering a path and content.</p>}
+
+              <div className="workspace-actions">
+                <button
+                  type="button"
+                  className="refresh-btn"
+                  onClick={handleStageFileChange}
+                  disabled={!githubConnected || !selectedRepo || !selectedBranch || isCommitting || !editorFilePath.trim()}
+                >
+                  Stage file change
+                </button>
+              </div>
+            </div>
 
           {stagedChanges.length > 0 && (
             <ul className="detail-list">
@@ -588,7 +681,7 @@ export function GithubPanel({
             </ul>
           )}
 
-          <div className="github-controls">
+          <div className="github-controls github-form-grid">
             <label>
               Commit message
               <input
@@ -602,7 +695,7 @@ export function GithubPanel({
             </label>
           </div>
 
-          <div className="workspace-actions">
+          <div className="workspace-actions workspace-actions--stacked">
             <button
               type="button"
               className="refresh-btn"
@@ -615,7 +708,7 @@ export function GithubPanel({
 
           {commitError && <p className="error-inline">{commitError}</p>}
           {commitSuccess && <p className="success-inline">{commitSuccess}</p>}
-        </div>
+      </div>
 
         {githubApiError && <p className="empty-state">{githubApiError}</p>}
 
@@ -641,10 +734,8 @@ export function GithubPanel({
             </a>
           </div>
         )}
-      </div>
-
       <div className="panel-section">
-        <h3>Linked pull requests</h3>
+        <h3>5. Linked pull requests</h3>
         {githubPullRequests.length === 0 ? (
           <p className="empty-state">No matching pull requests found.</p>
         ) : (

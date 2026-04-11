@@ -13,7 +13,7 @@ export function AppShell({ children }: AppShellProps) {
           <div className="site-mark">JT</div>
           <div>
             <p className="site-title">Jira Ticket Workspace</p>
-            <p className="site-subtitle">Track, refine, and implement from one interface</p>
+            <p className="site-subtitle">A clear workspace for delivery, planning, and implementation</p>
           </div>
         </div>
 

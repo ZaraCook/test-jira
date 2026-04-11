@@ -58,14 +58,29 @@ export function TicketWorkspacePage({
   onCancelEditTicket,
   onFieldSearchChange,
 }: TicketWorkspacePageProps) {
+  const selectedStatus = selectedIssueDetails?.status || 'Unknown'
+  const selectedPriority = selectedIssueDetails?.priority || 'Unknown'
+  const createdDisplay = selectedIssueDetails?.created ? new Date(selectedIssueDetails.created).toLocaleString() : 'Unknown'
+  const updatedDisplay = selectedIssueDetails?.updated ? new Date(selectedIssueDetails.updated).toLocaleString() : 'Unknown'
+  const dueDateDisplay = selectedIssueDetails?.dueDate ? new Date(selectedIssueDetails.dueDate).toLocaleDateString() : 'No due date'
+
   return (
     <section className="details-workspace full-workspace-view">
       <div className="workspace-header">
-        <div>
+        <div className="workspace-header-copy">
           <div className="workspace-issue-key">{selectedIssue.key}</div>
           <h2>{selectedIssue.summary}</h2>
+          <p className="workspace-subtitle">
+            Manage the ticket, review details, and connect GitHub work without leaving the page.
+          </p>
+          <div className="workspace-meta-row">
+            <span className={`status-pill status-${selectedStatus.toLowerCase().replace(/\s+/g, '-')}`}>{selectedStatus}</span>
+            <span className="priority-pill">{selectedPriority}</span>
+            <span className="detail-value">{selectedIssueDetails?.assignee || 'Unassigned'}</span>
+            <span className="detail-value">Due {dueDateDisplay}</span>
+          </div>
         </div>
-        <div className="workspace-actions">
+        <div className="workspace-actions workspace-header-actions">
           <button type="button" className="close-btn" onClick={onBackToIssues}>
             Back to issues
           </button>
@@ -87,6 +102,41 @@ export function TicketWorkspacePage({
       {!issueDetailsLoading && !issueDetailsError && selectedIssueDetails && (
         <div className="workspace-split">
           <section className="ticket-side">
+            <div className="panel-section">
+              <h3>Jira snapshot</h3>
+              <div className="issue-detail-grid">
+                <div>
+                  <span className="detail-label">Issue key</span>
+                  <span className="detail-value">{selectedIssueDetails.key}</span>
+                </div>
+                <div>
+                  <span className="detail-label">Issue type</span>
+                  <span className="detail-value">{selectedIssueDetails.type}</span>
+                </div>
+                <div>
+                  <span className="detail-label">Due date</span>
+                  <span className="detail-value">{dueDateDisplay}</span>
+                </div>
+                <div>
+                  <span className="detail-label">Assignee</span>
+                  <span className="detail-value">{selectedIssueDetails.assignee}</span>
+                </div>
+                <div>
+                  <span className="detail-label">Created</span>
+                  <span className="detail-value">{createdDisplay}</span>
+                </div>
+                <div>
+                  <span className="detail-label">Updated</span>
+                  <span className="detail-value">{updatedDisplay}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="panel-section">
+              <h3>Description</h3>
+              <pre className="issue-description">{selectedIssueDetails.description || 'No description provided.'}</pre>
+            </div>
+
             <div className="panel-section">
               <div className="section-title-row">
                 <h3>Edit ticket</h3>
@@ -136,7 +186,7 @@ export function TicketWorkspacePage({
             </div>
 
             <div className="panel-section">
-              <h3>Ticket details</h3>
+              <h3>Workflow and ownership</h3>
               <div className="jira-property-shell">
                 <div className="jira-property-row">
                   <span className="detail-label">Status</span>
@@ -181,22 +231,17 @@ export function TicketWorkspacePage({
                 </div>
                 <div className="jira-property-row">
                   <span className="detail-label">Created</span>
-                  <span className="detail-value">
-                    {selectedIssueDetails.created ? new Date(selectedIssueDetails.created).toLocaleString() : 'Unknown'}
-                  </span>
+                  <span className="detail-value">{createdDisplay}</span>
+                </div>
+                <div className="jira-property-row">
+                  <span className="detail-label">Due date</span>
+                  <span className="detail-value">{dueDateDisplay}</span>
                 </div>
                 <div className="jira-property-row">
                   <span className="detail-label">Updated</span>
-                  <span className="detail-value">
-                    {selectedIssueDetails.updated ? new Date(selectedIssueDetails.updated).toLocaleString() : 'Unknown'}
-                  </span>
+                  <span className="detail-value">{updatedDisplay}</span>
                 </div>
               </div>
-            </div>
-
-            <div className="panel-section">
-              <h3>Description</h3>
-              <pre className="issue-description">{selectedIssueDetails.description || 'No description provided.'}</pre>
             </div>
 
             <div className="panel-section">

@@ -6,6 +6,7 @@ export type JiraIssue = {
   type: string
   priority: string
   assignee: string
+  dueDate: string | null
   updated: string | null
   url: string
 }
@@ -26,6 +27,7 @@ export type JiraIssueDetails = {
   reporter: string
   creator: string
   created: string | null
+  dueDate: string | null
   updated: string | null
   labels: string[]
   components: string[]

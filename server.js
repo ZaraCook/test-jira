@@ -72,6 +72,57 @@ function jiraDescriptionToPlainText(description) {
     .trim()
 }
 
+function normalizeFieldName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+function extractDueDate(fields, names = null) {
+  if (!fields || typeof fields !== 'object') {
+    return null
+  }
+
+  const directValue =
+    fields?.duedate ?? fields?.dueDate ?? fields?.Duedate ?? null
+
+  if (typeof directValue === 'string' && directValue.trim()) {
+    return directValue
+  }
+
+  const rawFieldMatch = Object.entries(fields).find(([key, value]) => {
+    return (
+      normalizeFieldName(key) === 'duedate' &&
+      typeof value === 'string' &&
+      value.trim()
+    )
+  })
+
+  if (rawFieldMatch) {
+    return rawFieldMatch[1]
+  }
+
+  if (!names || typeof names !== 'object') {
+    return null
+  }
+
+  const dueFieldEntry = Object.entries(names).find(([key, label]) => {
+    const normalizedKey = normalizeFieldName(key)
+    const normalized = normalizeFieldName(label)
+    return normalized === 'duedate' || normalizedKey === 'duedate'
+  })
+
+  if (!dueFieldEntry) {
+    return null
+  }
+
+  const [fieldKey] = dueFieldEntry
+  const mappedValue = fields?.[fieldKey]
+
+  return typeof mappedValue === 'string' && mappedValue.trim() ? mappedValue : null
+}
+
 function parseGithubRepo(rawRepo) {
   const value = (rawRepo || '').trim()
 
@@ -1398,8 +1449,9 @@ app.get('/api/issues', async (_req, res) => {
   url.searchParams.set('maxResults', process.env.JIRA_MAX_RESULTS || '1000')
   url.searchParams.set(
     'fields',
-    'summary,status,issuetype,priority,assignee,updated',
+    'summary,status,issuetype,priority,assignee,duedate,updated',
   )
+  url.searchParams.set('expand', 'names')
 
   console.log('Calling Jira URL:', url.toString())
 
@@ -1432,6 +1484,7 @@ app.get('/api/issues', async (_req, res) => {
       type: issue.fields?.issuetype?.name || 'Unknown',
       priority: issue.fields?.priority?.name || 'None',
       assignee: issue.fields?.assignee?.displayName || 'Unassigned',
+      dueDate: extractDueDate(issue.fields, data?.names),
       updated: issue.fields?.updated || null,
       url: `${cleanBaseUrl}/browse/${issue.key}`,
     }))
@@ -1467,6 +1520,7 @@ app.get('/api/issues/:issueKey', async (req, res) => {
 
   const url = new URL(`${jira.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}`)
   url.searchParams.set('fields', '*all')
+  url.searchParams.set('expand', 'names')
 
   try {
     const response = await fetch(url, {
@@ -1500,6 +1554,7 @@ app.get('/api/issues/:issueKey', async (req, res) => {
         reporter: fields?.reporter?.displayName || 'Unknown',
         creator: fields?.creator?.displayName || 'Unknown',
         created: fields?.created || null,
+        dueDate: extractDueDate(fields, issue?.names),
         updated: fields?.updated || null,
         labels: Array.isArray(fields?.labels) ? fields.labels : [],
         components: Array.isArray(fields?.components)
