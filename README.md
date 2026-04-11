@@ -5,6 +5,7 @@ This app shows Jira issues and lets you:
 - browse real GitHub repositories, branches, and files
 - create new GitHub branches from the selected repository
 - edit Jira issue summary/description/status and save changes to Jira
+- use an AI assistant to explain tickets, draft ticket updates, suggest branch names, and suggest a fix plan
 
 ## Setup
 
@@ -34,6 +35,8 @@ Frontend runs on Vite, backend API proxy runs on port `3001` by default.
 - `GITHUB_REPOS`
 - `GITHUB_MAX_REPO_PAGES`
 - `GITHUB_MAX_FILES_PER_BRANCH`
+- `AI_MODEL`
+- `AI_API_KEY`
 
 ## GitHub token permissions
 
@@ -49,3 +52,16 @@ Ticket updates use Jira REST APIs to:
 - update `summary`
 - update `description`
 - transition status through available Jira transitions
+
+## AI assistant capabilities
+
+From the issue workspace, the AI assistant can:
+
+- explain the selected Jira ticket in plain language
+- draft improved summary/description from your explanation
+- suggest branch names for the issue
+- suggest an ordered plan for how to start fixing the issue
+
+The app does not automatically save AI text to Jira. Use the provided "Use AI ticket draft" action, review changes, then click "Save to Jira".
+
+The AI assistant uses Hugging Face's router endpoint directly. Set `AI_MODEL` and `AI_API_KEY` in `.env`.

@@ -174,6 +174,46 @@ type GithubCommitResponse = {
   details?: string
 }
 
+type AiAssistResult = {
+  ticketExplanation: string
+  updatedSummary: string
+  updatedDescription: string
+  ticketUpdateReasoning: string
+  branchSuggestions: string[]
+  fixPlan: string[]
+  planSteps: string[]
+  planSummary: string
+  reviewNotes: string
+  implementationSummary: string
+  implementationChanges: AiImplementationChange[]
+}
+
+type AiImplementationChange = {
+  path: string
+  action: 'create' | 'update' | 'delete'
+  content: string
+  reason: string
+}
+
+type AiAssistResponse = {
+  provider: string
+  model: string
+  task: string
+  repoSnapshot?: {
+    repo: string
+    branch: string
+    fileCount: number
+    omittedCount: number
+    truncated: boolean
+    readableFileCount: number
+  }
+  result: AiAssistResult
+  error?: string
+  details?: string
+}
+
+type AiFlowMode = 'explain-ticket' | 'read-repo' | 'suggest-plan' | 'edit-plan' | 'implement-plan'
+
 type StagedFileChange = {
   path: string
   content: string
@@ -233,6 +273,90 @@ function App() {
   const [commitError, setCommitError] = useState<string | null>(null)
   const [commitSuccess, setCommitSuccess] = useState<string | null>(null)
   const [isCommitting, setIsCommitting] = useState(false)
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiLoadingTask, setAiLoadingTask] = useState('')
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiResult, setAiResult] = useState<AiAssistResult | null>(null)
+  const [aiPlanText, setAiPlanText] = useState('')
+  const [approvedPlanText, setApprovedPlanText] = useState('')
+  const [planApproved, setPlanApproved] = useState(false)
+  const [aiFlowMode, setAiFlowMode] = useState<AiFlowMode>('read-repo')
+  const [aiSnapshotSummary, setAiSnapshotSummary] = useState<string>('')
+
+  const getDefaultBranchName = useCallback((issueKey: string) => {
+    return issueKey.toUpperCase()
+  }, [])
+
+  const buildPlanText = useCallback((result: AiAssistResult | null) => {
+    if (!result) {
+      return ''
+    }
+
+    const sourceSteps = Array.isArray(result.planSteps) && result.planSteps.length > 0 ? result.planSteps : result.fixPlan
+
+    if (sourceSteps.length > 0) {
+      return sourceSteps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+    }
+
+    return result.planSummary || result.ticketExplanation || ''
+  }, [])
+
+  const normalizeAiResult = useCallback((result: AiAssistResult | null): AiAssistResult | null => {
+    if (!result) {
+      return null
+    }
+
+    return {
+      ticketExplanation: result.ticketExplanation || '',
+      updatedSummary: result.updatedSummary || '',
+      updatedDescription: result.updatedDescription || '',
+      ticketUpdateReasoning: result.ticketUpdateReasoning || '',
+      branchSuggestions: Array.isArray(result.branchSuggestions) ? result.branchSuggestions : [],
+      fixPlan: Array.isArray(result.fixPlan) ? result.fixPlan : [],
+      planSteps: Array.isArray(result.planSteps) ? result.planSteps : [],
+      planSummary: result.planSummary || '',
+      reviewNotes: result.reviewNotes || '',
+      implementationSummary: result.implementationSummary || '',
+      implementationChanges: Array.isArray(result.implementationChanges) ? result.implementationChanges : [],
+    }
+  }, [])
+
+  const getAiModeConfig = useCallback((mode: AiFlowMode) => {
+    switch (mode) {
+      case 'explain-ticket':
+        return {
+          label: 'Explain ticket',
+          task: 'explain-ticket' as const,
+          prompt: 'Explain this Jira ticket in plain English.',
+        }
+      case 'read-repo':
+        return {
+          label: 'Read repo',
+          task: 'suggest-implementation' as const,
+          prompt: 'Read the repository structure and branch files, then suggest how to implement this ticket.',
+        }
+      case 'suggest-plan':
+        return {
+          label: 'Suggest plan',
+          task: 'suggest-fix' as const,
+          prompt: 'Suggest a step-by-step plan to implement this ticket.',
+        }
+      case 'edit-plan':
+        return {
+          label: 'Edit plan',
+          task: 'review-plan' as const,
+          prompt: 'Review this draft implementation plan and improve it before approval.',
+        }
+      case 'implement-plan':
+        return {
+          label: 'Implement plan',
+          task: 'implement-changes' as const,
+          prompt: 'Implement the approved plan using the repository contents.',
+        }
+    }
+  }, [])
+
+  const currentAiMode = getAiModeConfig(aiFlowMode)
 
   const assigneeOptions = useMemo(
     () =>
@@ -629,6 +753,16 @@ function App() {
   const handleSelectIssue = useCallback(
     (issue: JiraIssue) => {
       setSelectedIssue(issue)
+      setAiPrompt('')
+      setAiError(null)
+      setAiResult(null)
+      setAiLoadingTask('')
+      setAiPlanText('')
+      setApprovedPlanText('')
+      setPlanApproved(false)
+      setAiFlowMode('read-repo')
+      setAiSnapshotSummary('')
+      setBranchDraftName(getDefaultBranchName(issue.key))
       setIsEditingTicket(false)
       setTicketSaveError(null)
       setTicketSaveSuccess(null)
@@ -638,7 +772,7 @@ function App() {
       void fetchIssueTransitions(issue.key)
       void fetchIssueLinks(issue)
     },
-    [fetchIssueDetails, fetchIssueLinks, fetchIssueTransitions],
+    [fetchIssueDetails, fetchIssueLinks, fetchIssueTransitions, getDefaultBranchName],
   )
 
   const handleSaveTicket = useCallback(async () => {
@@ -875,6 +1009,226 @@ function App() {
     stagedChanges,
   ])
 
+  const requestAiAssist = useCallback(
+    async ({
+      task,
+      userExplanation,
+      planDraft,
+      approvedPlan,
+    }: {
+      task:
+        | 'auto'
+        | 'explain-ticket'
+        | 'update-ticket'
+        | 'suggest-branches'
+        | 'suggest-fix'
+        | 'suggest-implementation'
+        | 'review-plan'
+        | 'implement-changes'
+      userExplanation?: string
+      planDraft?: string
+      approvedPlan?: string
+    }) => {
+      if (!selectedIssueDetails) {
+        setAiError('Select an issue before using the AI assistant.')
+        return
+      }
+
+      try {
+        setAiLoadingTask(task)
+        setAiError(null)
+
+        const response = await fetch('http://localhost:3001/api/ai/assist', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            task,
+            userExplanation: userExplanation ?? aiPrompt,
+            planDraft,
+            approvedPlan,
+            repo: selectedRepo,
+            branch: selectedBranch,
+            existingBranches: availableBranches.map((item) => item.name),
+            issue: {
+              key: selectedIssueDetails.key,
+              summary: selectedIssueDetails.summary,
+              description: selectedIssueDetails.description,
+              status: selectedIssueDetails.status,
+              type: selectedIssueDetails.type,
+              priority: selectedIssueDetails.priority,
+              assignee: selectedIssueDetails.assignee,
+              labels: selectedIssueDetails.labels,
+              components: selectedIssueDetails.components,
+            },
+          }),
+        })
+
+        const payload = (await response.json()) as AiAssistResponse
+
+        if (!response.ok) {
+          const detailText = payload.details ? ` (${payload.details})` : ''
+          throw new Error((payload.error || 'AI assistant request failed') + detailText)
+        }
+
+        if (!payload.result) {
+          throw new Error('AI assistant did not return a result')
+        }
+
+        const normalizedResult = normalizeAiResult(payload.result)
+
+        setAiResult(normalizedResult)
+        setAiPlanText(buildPlanText(normalizedResult))
+        setApprovedPlanText('')
+        setPlanApproved(false)
+
+        if (payload.repoSnapshot) {
+          const snapshot = payload.repoSnapshot
+          setAiSnapshotSummary(
+            `Scanned ${snapshot.readableFileCount} readable file(s) from ${snapshot.repo} @ ${snapshot.branch}.`,
+          )
+        } else {
+          setAiSnapshotSummary('')
+        }
+
+        if (task === 'implement-changes' && normalizedResult && Array.isArray(normalizedResult.implementationChanges)) {
+          const nextChanges = normalizedResult.implementationChanges
+            .filter((change) => change.action !== 'delete' && change.path)
+            .map((change) => ({
+              path: change.path,
+              content: change.content,
+            }))
+
+          if (nextChanges.length > 0) {
+            setStagedChanges((prev) => {
+              const merged = [...prev]
+
+              for (const change of nextChanges) {
+                const existingIndex = merged.findIndex((item) => item.path === change.path)
+                if (existingIndex >= 0) {
+                  merged[existingIndex] = change
+                } else {
+                  merged.push(change)
+                }
+              }
+
+              return merged
+            })
+            setEditorFilePath(nextChanges[0].path)
+            setEditorFileContent(nextChanges[0].content)
+            setFileMode('new')
+            setSelectedFile('')
+          }
+        }
+      } catch (err) {
+        setAiError(err instanceof Error ? err.message : 'Unknown AI assistant error')
+      } finally {
+        setAiLoadingTask('')
+      }
+    },
+    [
+      aiPrompt,
+      availableBranches,
+      buildPlanText,
+      normalizeAiResult,
+      selectedBranch,
+      selectedIssueDetails,
+      selectedRepo,
+    ],
+  )
+
+  const runSelectedAiFlow = useCallback(() => {
+    if (aiFlowMode === 'edit-plan' && !aiPlanText.trim()) {
+      setAiError('Write or generate a plan before asking AI to edit it.')
+      return
+    }
+
+    if (aiFlowMode === 'implement-plan' && !approvedPlanText.trim()) {
+      setAiError('Approve a plan before asking AI to implement it.')
+      return
+    }
+
+    const modeConfig = getAiModeConfig(aiFlowMode)
+
+    void requestAiAssist({
+      task: modeConfig.task,
+      userExplanation: aiPrompt.trim() || modeConfig.prompt,
+      planDraft: aiFlowMode === 'edit-plan' ? aiPlanText : undefined,
+      approvedPlan: aiFlowMode === 'implement-plan' ? approvedPlanText : undefined,
+    })
+  }, [
+    aiFlowMode,
+    aiPlanText,
+    aiPrompt,
+    approvedPlanText,
+    getAiModeConfig,
+    requestAiAssist,
+  ])
+
+  const handleReviewPlan = useCallback(() => {
+    if (!aiPlanText.trim()) {
+      setAiError('Write or generate a plan before reviewing it.')
+      return
+    }
+
+    void requestAiAssist({
+      task: 'review-plan',
+      userExplanation: 'Review this plan and improve it for implementation.',
+      planDraft: aiPlanText,
+    })
+  }, [aiPlanText, requestAiAssist])
+
+  const handleApprovePlan = useCallback(() => {
+    const trimmedPlan = aiPlanText.trim()
+
+    if (!trimmedPlan) {
+      setAiError('Write or generate a plan before approving it.')
+      return
+    }
+
+    setApprovedPlanText(trimmedPlan)
+    setPlanApproved(true)
+    setAiError(null)
+  }, [aiPlanText])
+
+  const handleImplementChanges = useCallback(() => {
+    if (!planApproved || !approvedPlanText.trim()) {
+      setAiError('Approve a plan before asking AI to implement changes.')
+      return
+    }
+
+    void requestAiAssist({
+      task: 'implement-changes',
+      userExplanation: aiPrompt,
+      approvedPlan: approvedPlanText,
+    })
+  }, [aiPrompt, approvedPlanText, planApproved, requestAiAssist])
+
+  const applyAiTicketDraft = useCallback(() => {
+    if (!aiResult) {
+      return
+    }
+
+    if (aiResult.updatedSummary) {
+      setTicketDraftSummary(aiResult.updatedSummary)
+    }
+
+    if (aiResult.updatedDescription) {
+      setTicketDraftDescription(aiResult.updatedDescription)
+    }
+
+    setIsEditingTicket(true)
+    setTicketSaveError(null)
+    setTicketSaveSuccess(null)
+  }, [aiResult])
+
+  useEffect(() => {
+    setAiPlanText(buildPlanText(aiResult))
+    setApprovedPlanText('')
+    setPlanApproved(false)
+  }, [aiResult, buildPlanText])
+
   useEffect(() => {
     void fetchIssues()
   }, [fetchIssues])
@@ -900,6 +1254,12 @@ function App() {
       setEditorFileContent('')
     }
   }, [editorFilePath, fileMode, selectedFile, selectedFileContent])
+
+  useEffect(() => {
+    if (selectedIssue) {
+      setBranchDraftName((current) => current || getDefaultBranchName(selectedIssue.key))
+    }
+  }, [getDefaultBranchName, selectedIssue])
 
   useEffect(() => {
     if (!githubConnected || availableRepos.length === 0) {
@@ -1093,6 +1453,15 @@ function App() {
     setCommitMessage('')
     setCommitError(null)
     setCommitSuccess(null)
+    setAiPrompt('')
+    setAiLoadingTask('')
+    setAiError(null)
+    setAiResult(null)
+    setAiPlanText('')
+    setApprovedPlanText('')
+    setPlanApproved(false)
+    setAiFlowMode('read-repo')
+    setAiSnapshotSummary('')
   }
 
   const renderIssueList = () => {
@@ -1221,6 +1590,270 @@ function App() {
 
           </div>
 
+          <div className="panel-section ai-workspace-section">
+            <div className="section-title-row">
+              <h3>AI assistant</h3>
+              <span className="field-meta">Uses the selected repo and branch</span>
+            </div>
+
+            <div className="github-controls">
+              <label>
+                Describe what you want the AI to do
+                <textarea
+                  className="ticket-textarea"
+                  rows={4}
+                  placeholder="Example: Read the repository structure and suggest how to implement this Jira ticket."
+                  value={aiPrompt}
+                  onChange={(event) => setAiPrompt(event.target.value)}
+                  disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch}
+                />
+              </label>
+            </div>
+
+            <div className="ai-mode-row">
+              <button
+                type="button"
+                className={`ai-mode-pill ${aiFlowMode === 'explain-ticket' ? 'ai-mode-pill-active' : ''}`}
+                onClick={() => {
+                  setAiFlowMode('explain-ticket')
+                  setAiPrompt('Explain this Jira ticket in plain English.')
+                }}
+              >
+                Explain ticket
+              </button>
+
+              <button
+                type="button"
+                className={`ai-mode-pill ${aiFlowMode === 'read-repo' ? 'ai-mode-pill-active' : ''}`}
+                onClick={() => {
+                  setAiFlowMode('read-repo')
+                  setAiPrompt('Read the repository structure and branch files, then suggest how to implement this ticket.')
+                }}
+              >
+                Read repo
+              </button>
+
+              <button
+                type="button"
+                className={`ai-mode-pill ${aiFlowMode === 'suggest-plan' ? 'ai-mode-pill-active' : ''}`}
+                onClick={() => {
+                  setAiFlowMode('suggest-plan')
+                  setAiPrompt('Suggest a step-by-step plan to implement this ticket.')
+                }}
+              >
+                Suggest plan
+              </button>
+
+              <button
+                type="button"
+                className={`ai-mode-pill ${aiFlowMode === 'edit-plan' ? 'ai-mode-pill-active' : ''}`}
+                onClick={() => {
+                  setAiFlowMode('edit-plan')
+                  setAiPrompt('Review this draft implementation plan and improve it before approval.')
+                }}
+              >
+                Edit plan
+              </button>
+
+              <button
+                type="button"
+                className={`ai-mode-pill ${aiFlowMode === 'implement-plan' ? 'ai-mode-pill-active' : ''}`}
+                onClick={() => {
+                  setAiFlowMode('implement-plan')
+                  setAiPrompt('Implement the approved plan using the repository contents.')
+                }}
+              >
+                Implement plan
+              </button>
+            </div>
+
+            <div className="workspace-actions ai-actions-inline">
+              <button
+                type="button"
+                className="refresh-btn"
+                onClick={runSelectedAiFlow}
+                disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch}
+              >
+                {aiLoadingTask ? 'Thinking...' : 'Ask AI'}
+              </button>
+
+              <span className="field-meta ai-current-mode">Current mode: {currentAiMode.label}</span>
+            </div>
+
+            {aiSnapshotSummary && <p className="field-meta">{aiSnapshotSummary}</p>}
+
+            {aiFlowMode === 'edit-plan' && (
+              <div className="plan-review-card">
+                <div className="section-title-row">
+                  <h4>Plan review</h4>
+                  <span className="field-meta">{planApproved ? 'Approved' : 'Draft'}</span>
+                </div>
+
+                <label>
+                  Editable plan
+                  <textarea
+                    className="ticket-textarea plan-textarea"
+                    rows={8}
+                    placeholder="Generate a plan, review it, then edit it here before approving it."
+                    value={aiPlanText}
+                    onChange={(event) => {
+                      setAiPlanText(event.target.value)
+                      setApprovedPlanText('')
+                      setPlanApproved(false)
+                    }}
+                    disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch}
+                  />
+                </label>
+
+                <div className="workspace-actions ai-actions-stack">
+                  <button
+                    type="button"
+                    className="refresh-btn"
+                    onClick={handleReviewPlan}
+                    disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch || !aiPlanText.trim()}
+                  >
+                    {aiLoadingTask === 'review-plan' ? 'Reviewing...' : 'Review plan'}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="refresh-btn"
+                    onClick={handleApprovePlan}
+                    disabled={!!aiLoadingTask || !githubConnected || !selectedRepo || !selectedBranch || !aiPlanText.trim()}
+                  >
+                    {planApproved ? 'Plan approved' : 'Approve plan'}
+                  </button>
+                </div>
+
+                {approvedPlanText && <p className="field-meta">Approved plan ready for implementation.</p>}
+                {aiResult?.planSummary && <p className="field-meta">{aiResult.planSummary}</p>}
+                {aiResult?.reviewNotes && <p className="field-meta">{aiResult.reviewNotes}</p>}
+              </div>
+            )}
+
+            {aiFlowMode === 'implement-plan' && (
+              <div className="plan-review-card">
+                <div className="section-title-row">
+                  <h4>Implement plan</h4>
+                  <span className="field-meta">Uses approved plan text</span>
+                </div>
+                <p className="field-meta">
+                  {approvedPlanText.trim()
+                    ? 'Approved plan ready. Click Ask AI to generate implementation changes.'
+                    : 'Approve a plan in Edit plan before implementing changes.'}
+                </p>
+                <div className="workspace-actions ai-actions-stack">
+                  <button
+                    type="button"
+                    className="refresh-btn"
+                    onClick={handleImplementChanges}
+                    disabled={
+                      !!aiLoadingTask ||
+                      !githubConnected ||
+                      !selectedRepo ||
+                      !selectedBranch ||
+                      !approvedPlanText.trim()
+                    }
+                  >
+                    {aiLoadingTask === 'implement-changes' ? 'Implementing...' : 'Implement changes with AI'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="ai-helper-row">
+              <button type="button" className="ai-helper-chip" onClick={() => setAiPrompt('Explain this ticket in plain English.')}>Explain</button>
+              <button type="button" className="ai-helper-chip" onClick={() => setAiPrompt('Draft an improved Jira summary and description from this ticket.')}>Draft update</button>
+              <button type="button" className="ai-helper-chip" onClick={() => setAiPrompt('Suggest the best way to start fixing this issue.')}>Suggest fix plan</button>
+              <button type="button" className="ai-helper-chip" onClick={() => setAiPrompt('Suggest branch names for this Jira ticket.')}>Branch names</button>
+            </div>
+
+            <div className="workspace-actions ai-actions-stack">
+              {Array.isArray(aiResult?.branchSuggestions) && aiResult.branchSuggestions.length > 0 && (
+                <div className="ai-suggestion-box">
+                  <div className="detail-subtext">Branch suggestions</div>
+                  <div className="ai-suggestion-list">
+                    {aiResult.branchSuggestions.map((branchName) => (
+                      <button
+                        key={branchName}
+                        type="button"
+                        className="ai-suggestion-pill"
+                        onClick={() => setBranchDraftName(branchName)}
+                      >
+                        {branchName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(aiResult?.updatedSummary || aiResult?.updatedDescription) && (
+                <button type="button" className="refresh-btn" onClick={applyAiTicketDraft}>
+                  Use AI ticket draft
+                </button>
+              )}
+            </div>
+
+            {aiError && <p className="error-inline">{aiError}</p>}
+
+            {aiResult?.ticketExplanation && (
+              <div className="field-accordion-list">
+                <details className="field-accordion-item" open>
+                  <summary>
+                    <span className="field-key">Ticket explanation</span>
+                    <span className="field-meta">AI generated</span>
+                  </summary>
+                  <pre className="field-value-viewer">
+                    <code>{aiResult.ticketExplanation}</code>
+                  </pre>
+                </details>
+              </div>
+            )}
+
+            {aiResult?.ticketUpdateReasoning && <p className="field-meta">{aiResult.ticketUpdateReasoning}</p>}
+
+            {aiFlowMode === 'edit-plan' && Array.isArray(aiResult?.planSteps) && aiResult.planSteps.length > 0 && (
+              <div className="field-accordion-list">
+                <details className="field-accordion-item" open>
+                  <summary>
+                    <span className="field-key">Suggested fix plan</span>
+                    <span className="field-meta">AI generated</span>
+                  </summary>
+                  <ul className="detail-list">
+                    {aiResult.planSteps.map((step) => (
+                      <li key={step} className="detail-card">
+                        {step}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </div>
+            )}
+
+            {aiFlowMode === 'implement-plan' && aiResult?.implementationSummary && <p className="field-meta">{aiResult.implementationSummary}</p>}
+
+            {aiFlowMode === 'implement-plan' && Array.isArray(aiResult?.implementationChanges) && aiResult.implementationChanges.length > 0 && (
+              <div className="field-accordion-list">
+                <details className="field-accordion-item" open>
+                  <summary>
+                    <span className="field-key">AI implementation changes</span>
+                    <span className="field-meta">Ready to stage</span>
+                  </summary>
+                  <ul className="detail-list">
+                    {aiResult.implementationChanges.map((change) => (
+                      <li key={`${change.action}-${change.path}`} className="detail-card">
+                        <div className="detail-subtext">
+                          {change.action.toUpperCase()} · {change.path}
+                        </div>
+                        {change.reason && <div className="field-meta">{change.reason}</div>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </div>
+            )}
+          </div>
+
           <div className="panel-section branch-create-section">
             <h3>Create branch</h3>
             <div className="github-controls">
@@ -1229,13 +1862,15 @@ function App() {
                 <input
                   type="text"
                   className="search-input"
-                  placeholder={selectedIssue ? `feature/${selectedIssue.key.toLowerCase()}-change` : 'feature/new-branch'}
+                  placeholder={selectedIssue ? getDefaultBranchName(selectedIssue.key) : 'SCRUM-20'}
                   value={branchDraftName}
                   onChange={(event) => setBranchDraftName(event.target.value)}
                   disabled={!githubConnected || !selectedRepo || creatingBranch}
                 />
               </label>
             </div>
+            <p className="field-meta">Base branch: {selectedBranch || 'Select a branch above'}</p>
+            <p className="field-meta">Branch name should match the Jira issue key, and you can edit it before creating the branch.</p>
             <button
               type="button"
               className="refresh-btn"
